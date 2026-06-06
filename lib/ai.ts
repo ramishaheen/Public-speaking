@@ -230,22 +230,97 @@ function countWords(s: string): number {
   return s.trim().split(/\s+/).filter(Boolean).length;
 }
 
-function scoreFromText(text: string, base: number): number {
-  const words = countWords(text);
-  const hasOpening = /^(hi|hello|thank|my name|i am|good morning|good afternoon|today|let me)/i.test(text.trim());
-  const hasNumbers = /\d/.test(text);
-  const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 0).length;
-  let s = base;
-  if (words >= 25) s += 6;
-  if (words >= 60) s += 4;
-  if (words < 12) s -= 14;
-  if (hasOpening) s += 5;
-  if (sentences >= 2) s += 4;
-  if (hasNumbers) s += 2;
-  // Gentle variability seeded by length.
-  s += (words % 5) - 2;
-  return Math.max(35, Math.min(96, Math.round(s)));
+// ============================================================
+// Content-aware speech analyzer (used when no LLM key is set).
+// Each aspect is scored from DISTINCT signals in the actual text,
+// and the notes cite exactly what was found.
+// ============================================================
+
+const FILLERS = [
+  "um", "uh", "er", "ah", "like", "you know", "basically", "actually",
+  "literally", "sort of", "kind of", "i mean", "well", "yeah", "okay so",
+];
+const HEDGES = [
+  "maybe", "perhaps", "i think", "i guess", "i suppose", "probably", "possibly",
+  "hopefully", "just", "a little", "somewhat", "might", "i'm not sure", "kind of", "sort of",
+];
+const STRONG = [
+  "will", "can", "definitely", "absolutely", "committed", "deliver", "achieve",
+  "lead", "create", "build", "drive", "ensure", "proven", "confident", "know",
+];
+const CONNECTORS = [
+  "first", "second", "third", "then", "next", "finally", "because", "therefore",
+  "so that", "however", "in addition", "as a result", "for example", "which means", "after",
+];
+const AUDIENCE = [
+  "you", "your", "we", "us", "our", "together", "team", "understand",
+  "help", "support", "listen", "imagine", "let's", "share",
+];
+const VALUE = [
+  "improve", "increase", "result", "impact", "benefit", "value", "save",
+  "grow", "outcome", "success", "goal", "solve", "better", "faster", "stronger",
+];
+const STORY = [
+  "when", "once", "last year", "years ago", "ago", "remember", "story",
+  "happened", "suddenly", "realized", "learned", "discovered", "decided", "moment",
+];
+
+function countMatches(haystack: string, needles: string[]): { count: number; found: string[] } {
+  const found: string[] = [];
+  let count = 0;
+  for (const n of needles) {
+    const re = new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+    const m = haystack.match(re);
+    if (m && m.length) {
+      count += m.length;
+      if (!found.includes(n)) found.push(n);
+    }
+  }
+  return { count, found };
 }
+
+interface SpeechAnalysis {
+  words: number;
+  sentences: number;
+  avgSentenceLen: number;
+  fillers: { count: number; found: string[] };
+  hedges: { count: number; found: string[] };
+  strong: { count: number; found: string[] };
+  connectors: { count: number; found: string[] };
+  audience: { count: number; found: string[] };
+  value: { count: number; found: string[] };
+  story: { count: number; found: string[] };
+  hasOpening: boolean;
+  hasClosing: boolean;
+  hasNumbers: boolean;
+  hasQuestion: boolean;
+}
+
+function analyzeSpeech(text: string): SpeechAnalysis {
+  const t = text.trim();
+  const lower = t.toLowerCase();
+  const words = countWords(t);
+  const sentenceParts = t.split(/[.!?]+/).map((s) => s.trim()).filter(Boolean);
+  const sentences = Math.max(sentenceParts.length, t ? 1 : 0);
+  return {
+    words,
+    sentences,
+    avgSentenceLen: sentences ? Math.round(words / sentences) : 0,
+    fillers: countMatches(lower, FILLERS),
+    hedges: countMatches(lower, HEDGES),
+    strong: countMatches(lower, STRONG),
+    connectors: countMatches(lower, CONNECTORS),
+    audience: countMatches(lower, AUDIENCE),
+    value: countMatches(lower, VALUE),
+    story: countMatches(lower, STORY),
+    hasOpening: /^(hi|hello|thank|my name|i am|i'm|good morning|good afternoon|today|let me|imagine|hey)/i.test(t),
+    hasClosing: /(thank you|in short|to sum|in conclusion|that's why|so let's|i'd love|looking forward|in summary)[.!]?$/i.test(t),
+    hasNumbers: /\d/.test(t),
+    hasQuestion: /\?/.test(t),
+  };
+}
+
+const clampScore = (n: number) => Math.max(20, Math.min(98, Math.round(n)));
 
 export function generatePracticeFeedback(
   response: string,
@@ -253,32 +328,117 @@ export function generatePracticeFeedback(
   p: UserProfile,
 ): PracticeFeedback {
   const scenario = PRACTICE_SCENARIOS.find((x) => x.id === scenarioId);
-  const base = 60 + Math.round((p.scores.overall - 50) * 0.2);
-  const clarity = scoreFromText(response, base + 4);
-  const confidence = scoreFromText(response, base);
-  const structure = scoreFromText(response, base + 2);
-  const empathy = scoreFromText(response, base + 6);
-  const persuasion = scoreFromText(response, base - 1);
-  const storytelling = scoreFromText(response, base + 1);
-  const overall = Math.round((clarity + confidence + structure + empathy + persuasion + storytelling) / 6);
+  const a = analyzeSpeech(response);
+  const tilt = Math.round((p.scores.overall - 50) * 0.12); // small personal baseline tilt
 
-  const words = countWords(response);
-  const lowestPair = [
-    ["a stronger opening and a clearer ending", structure],
-    ["more confident pacing — slow down and breathe", confidence],
-    ["a sharper, more persuasive core message", persuasion],
-    ["a clearer structure so ideas flow in order", clarity],
-  ].sort((a, b) => (a[1] as number) - (b[1] as number))[0][0] as string;
+  // Very short answers can't demonstrate much — score honestly low.
+  const shortPenalty = a.words < 8 ? -28 : a.words < 15 ? -12 : 0;
 
+  // --- CLARITY: concise sentences, few fillers, readable length ---
+  let clarity = 70 + tilt + shortPenalty;
+  clarity -= a.fillers.count * 5;
+  if (a.avgSentenceLen > 28) clarity -= 10; // run-on sentences
+  if (a.avgSentenceLen >= 8 && a.avgSentenceLen <= 20) clarity += 8;
+  if (a.words >= 20 && a.words <= 90) clarity += 4;
+
+  // --- CONFIDENCE: assertive verbs up, hedging down ---
+  let confidence = 66 + tilt + shortPenalty;
+  confidence += Math.min(a.strong.count * 4, 16);
+  confidence -= Math.min(a.hedges.count * 5, 25);
+  if (a.hasClosing) confidence += 5;
+
+  // --- STRUCTURE: opening + closing + connectors + multiple sentences ---
+  let structure = 60 + tilt + shortPenalty;
+  if (a.hasOpening) structure += 9;
+  if (a.hasClosing) structure += 9;
+  structure += Math.min(a.connectors.count * 5, 18);
+  if (a.sentences >= 3) structure += 6;
+  if (a.sentences <= 1 && a.words > 25) structure -= 8; // one long blob
+
+  // --- EMPATHY: audience-oriented language, questions ---
+  let empathy = 62 + tilt + shortPenalty;
+  empathy += Math.min(a.audience.count * 4, 20);
+  if (a.hasQuestion) empathy += 6;
+
+  // --- PERSUASION: value/benefit words, evidence/numbers, a call to action ---
+  let persuasion = 60 + tilt + shortPenalty;
+  persuasion += Math.min(a.value.count * 5, 22);
+  if (a.hasNumbers) persuasion += 6;
+  if (a.hasClosing) persuasion += 4;
+
+  // --- STORYTELLING: narrative markers, concrete past-tense arc ---
+  let storytelling = 58 + tilt + shortPenalty;
+  storytelling += Math.min(a.story.count * 5, 24);
+  if (a.value.count > 0 && a.story.count > 0) storytelling += 5; // story with a takeaway
+
+  clarity = clampScore(clarity);
+  confidence = clampScore(confidence);
+  structure = clampScore(structure);
+  empathy = clampScore(empathy);
+  persuasion = clampScore(persuasion);
+  storytelling = clampScore(storytelling);
+  const overall = Math.round(
+    (clarity + confidence + structure + empathy + persuasion + storytelling) / 6,
+  );
+
+  // ---- Specific, content-cited notes ----
+  const strengths: string[] = [];
+  if (a.hasOpening) strengths.push("you opened with a clear hook");
+  if (a.connectors.count >= 2)
+    strengths.push(`you signposted with connectors like "${a.connectors.found.slice(0, 2).join('", "')}"`);
+  if (a.strong.count >= 2) strengths.push("you used assertive, ownership language");
+  if (a.audience.count >= 3) strengths.push("you spoke to the listener, not just at them");
+  if (a.story.count >= 2) strengths.push("you brought a concrete story, not just claims");
+  if (a.value.count >= 2) strengths.push("you named a clear benefit/outcome");
   const didWell =
-    words < 12
-      ? "You made a start, which is the hardest step. Your tone is approachable."
-      : "You expressed your idea clearly and kept a friendly, natural tone.";
+    a.words < 8
+      ? "You made a start — but there's too little here to evaluate. Give a few full sentences so each skill can be measured."
+      : strengths.length
+        ? `Strong points: ${strengths.slice(0, 2).join("; ")}.`
+        : "Your tone is natural and approachable — a good base to build structure and specifics on.";
 
-  const betterVersion = buildBetterVersion(scenario?.title || "your response", response);
+  // Build precise improvement targeting the weakest aspect.
+  const ranked = (
+    [
+      ["clarity", clarity],
+      ["confidence", confidence],
+      ["structure", structure],
+      ["empathy", empathy],
+      ["persuasion", persuasion],
+      ["storytelling", storytelling],
+    ] as [string, number][]
+  ).sort((x, y) => x[1] - y[1]);
+  const weakest = ranked[0][0];
 
-  const microChallenge =
-    "Repeat your answer in 45 seconds with one clear opening sentence and one strong closing sentence.";
+  const improveMap: Record<string, string> = {
+    clarity: a.fillers.count
+      ? `Cut filler words — you used ${a.fillers.count} (e.g. "${a.fillers.found.slice(0, 2).join('", "')}"). Pause instead of filling the gap.`
+      : a.avgSentenceLen > 28
+        ? "Break up long sentences — your average sentence is very long. Aim for one idea per sentence."
+        : "Tighten your phrasing so each sentence carries one clear idea.",
+    confidence: a.hedges.count
+      ? `Drop hedging language — you used ${a.hedges.count} (e.g. "${a.hedges.found.slice(0, 2).join('", "')}"). Say "I will" instead of "I think maybe".`
+      : "Add assertive verbs (will, deliver, create) and end on a definite statement.",
+    structure: !a.hasOpening
+      ? "Add a clear opening line that states who you are or what your point is, before the details."
+      : !a.hasClosing
+        ? "Add a closing line that lands the point (e.g. \"In short, …\"). Right now it stops without resolving."
+        : "Order your ideas with signposts: first… then… finally.",
+    empathy: "Speak to the listener — use \"you\"/\"we\", and frame the value for them, not just for you.",
+    persuasion: a.hasNumbers
+      ? "Turn your point into a benefit + a call to action (\"which means…, so let's…\")."
+      : "Add one concrete proof point (a number, example, or result) and a clear call to action.",
+    storytelling: "Anchor it in a brief story: a moment, what you did, and the lesson — that makes it memorable.",
+  };
+
+  const microMap: Record<string, string> = {
+    clarity: "Re-record in 45s with zero filler words — pause instead of saying \"um\".",
+    confidence: "Say it again replacing every \"I think/maybe\" with \"I will\".",
+    structure: "Re-do it with exactly: 1 opening line, 2 body points, 1 closing line.",
+    empathy: "Rewrite it using \"you\" or \"we\" at least twice.",
+    persuasion: "Add one number and one call-to-action sentence, then re-record.",
+    storytelling: "Tell it as a 30-second story: moment → action → lesson.",
+  };
 
   return {
     overall,
@@ -289,30 +449,45 @@ export function generatePracticeFeedback(
     persuasion,
     storytelling,
     didWell,
-    improve: `Your response needs ${lowestPair}.`,
-    betterVersion,
-    microChallenge,
+    improve: `Biggest lever — ${weakest} (${ranked[0][1]}/100): ${improveMap[weakest]}`,
+    betterVersion: buildBetterVersion(scenarioId, response),
+    microChallenge: microMap[weakest],
   };
 }
 
-function buildBetterVersion(title: string, response: string): string {
-  const t = title.toLowerCase();
-  if (t.includes("introduce")) {
-    return "“Hello, I'm [name]. I help [who] achieve [value] by [how]. In short — I turn ideas into clear, confident action.”";
-  }
-  if (t.includes("story")) {
-    return "“Last year I faced [challenge]. I decided to [action]. It was not easy, but it taught me [lesson] — and I have used it ever since.”";
-  }
-  if (t.includes("project")) {
-    return "“Our goal was [goal]. We delivered [key result], which means [impact]. Next, we will [next step].”";
-  }
-  if (t.includes("criticism")) {
-    return "“Thank you for the honest feedback. You are right that [point]. Here is what I will change going forward: [specific action].”";
-  }
-  if (t.includes("interview")) {
-    return "“In my last role, the situation was [S]. My task was [T]. I [action], and as a result [measurable result].”";
-  }
-  return "“Thank you for the opportunity. My idea is simple: we can improve [outcome] by [clear action] and [clear action]. The result is [benefit].”";
+// A strong, structured model answer for every Practice Room scenario.
+const BETTER_VERSION_BY_ID: Record<string, string> = {
+  intro30:
+    "“Hi, I'm [name]. I help [who] achieve [value] by [how]. In short — I turn ideas into clear, confident action.”",
+  shortstory:
+    "“Last year I faced [challenge]. I decided to [action]. It wasn't easy, but it taught me [lesson] — and I've used it ever since.”",
+  explainidea:
+    "“Here's the idea in one line: [core idea]. Think of it like [simple analogy]. It matters because [benefit] — so the takeaway is [one clear point].”",
+  disagree:
+    "“I see your point about [their view], and I value it. I see it differently: [your view], because [reason]. Could we try [common-ground option]?”",
+  project:
+    "“Our goal was [goal]. We delivered [key result], which means [impact]. The next step is [next step], and I'll own [your part].”",
+  networking:
+    "“Hi, I'm [name] — I really enjoyed [shared context]. What brings you here today? … That's interesting; I work on [your area], so I'd love to hear more about [their topic].”",
+  criticism:
+    "“Thank you for the honest feedback. You're right that [point]. Here's what I'll change going forward: [specific action], and I'll follow up by [date].”",
+  negotiate:
+    "“I understand you need [their need]. What I need is [your need]. Here's a fair middle path: [specific proposal] — that way we both get [shared benefit].”",
+  pressure:
+    "“Let me take this clearly. The key point is [main point]. Two things matter most: [point 1] and [point 2]. So my recommendation is [decision].”",
+  leadership:
+    "“Quick update: we're [status] on [goal]. The win this week is [win]. The one risk is [risk], and here's my plan: [action]. I need [specific support].”",
+  interview:
+    "“In my last role, the situation was [S]. My task was [T]. I [action], and as a result [measurable result]. It's exactly the kind of challenge I'd bring to this role.”",
+  openpresentation:
+    "“[Surprising fact or question]. Today I'll show you [promise] in three parts: [A], [B], [C]. By the end, you'll be able to [audience takeaway]. Let's begin.”",
+};
+
+function buildBetterVersion(scenarioId: string, response: string): string {
+  return (
+    BETTER_VERSION_BY_ID[scenarioId] ||
+    "“Thank you for the opportunity. My point is simple: we can improve [outcome] by [clear action] and [clear action]. The result is [benefit].”"
+  );
 }
 
 // ============================================================
