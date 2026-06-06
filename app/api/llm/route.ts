@@ -95,9 +95,37 @@ async function callGemini(opts: {
   return text;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const key = geminiKey();
+  const selftest = new URL(req.url).searchParams.get("selftest") === "1";
+  if (selftest && key) {
+    // Make a tiny real Gemini call to verify the key is valid (not just present).
+    try {
+      const text = await callGemini({
+        system: "You are a connectivity test.",
+        user: 'Return exactly this JSON: {"ok": true}',
+        temperature: 0,
+      });
+      const ok = /"ok"\s*:\s*true/.test(text);
+      return NextResponse.json({
+        configured: true,
+        provider: "gemini",
+        model: MODEL,
+        selftest: ok ? "pass" : "unexpected",
+        sample: text.slice(0, 80),
+      });
+    } catch (e: any) {
+      return NextResponse.json({
+        configured: true,
+        provider: "gemini",
+        model: MODEL,
+        selftest: "fail",
+        error: String(e?.message || e).slice(0, 240),
+      });
+    }
+  }
   return NextResponse.json({
-    configured: !!geminiKey(),
+    configured: !!key,
     provider: "gemini",
     model: MODEL,
   });
