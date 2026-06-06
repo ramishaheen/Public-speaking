@@ -208,7 +208,17 @@ Learner's current goals: ${JSON.stringify(p?.selectedGoals || [])}.
 
 ${responseBlock}
 
-Score each dimension 0-100 honestly (do not inflate). Give specific, kind, actionable feedback that nudges them toward ${roleModel}'s speaking style. The "betterVersion" must be a rewritten, stronger version of THEIR answer (same scenario), with a strong opening and closing.
+BE A STRICT, CRITICAL COACH — not a cheerleader. Evaluate ONLY what they actually said:
+- Score each dimension 0-100 on the MERIT of THIS specific answer. Do not inflate. A vague,
+  one-line, or off-topic answer should score low (30-55). Reserve 85+ for genuinely excellent delivery.
+- Every comment MUST quote or reference their EXACT words/phrases (use "quotes"). No generic,
+  copy-paste advice that could apply to any answer.
+- Name concrete problems you detect: filler words, hedging ("I think/maybe"), run-on sentences,
+  missing opening or closing, no specifics/evidence, off-topic content, weak verbs, no call to action.
+- If the answer is too short or empty to judge, say so plainly and score accordingly.
+- The "betterVersion" must rewrite THEIR actual content (same facts/intent) into a sharper version
+  with a strong opening and closing — not a generic template.
+- Tie one suggestion to ${roleModel}'s speaking style, referencing a specific technique they use.
 
 Return ONLY valid JSON with this exact shape:
 {
@@ -220,10 +230,10 @@ Return ONLY valid JSON with this exact shape:
   "empathy": 0,
   "persuasion": 0,
   "storytelling": 0,
-  "didWell": "what they did well (1-2 sentences, specific)",
-  "improve": "the single most important growth area (1-2 sentences)",
-  "betterVersion": "a stronger rewritten version of their answer",
-  "microChallenge": "one concrete micro-challenge for next time"
+  "didWell": "1-2 sentences citing the exact strong phrase(s) they used",
+  "improve": "the single biggest weakness, quoting the exact words that need fixing and how",
+  "betterVersion": "their answer rewritten stronger, keeping their actual content",
+  "microChallenge": "one concrete micro-challenge targeting their specific weakness"
 }`;
 
   const text = await callGemini({
