@@ -18,6 +18,9 @@ export const runtime = "nodejs";
 
 const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
+// Allow up to 60s so the model has room for a deep response (Vercel Hobby max).
+export const maxDuration = 60;
+
 // Resolve the Gemini API key tolerantly. Env var names are case-sensitive,
 // so accept the canonical name plus common variants and any case spelling
 // (e.g. GEMINI_API_KEY, Gemini_Api_key, gemini-api-key, GOOGLE_API_KEY).
@@ -81,7 +84,7 @@ async function callGemini(opts: {
       generationConfig: {
         temperature: opts.temperature ?? 0.7,
         responseMimeType: "application/json",
-        maxOutputTokens: 2048,
+        maxOutputTokens: 4096,
       },
     }),
   });
@@ -224,19 +227,17 @@ Learner's current goals: ${JSON.stringify(p?.selectedGoals || [])}.
 
 ${responseBlock}
 
-BE A STRICT, CRITICAL COACH — not a cheerleader. Evaluate ONLY what they actually said:
-- Score each dimension 0-100 on the MERIT of THIS specific answer. Do not inflate. A vague,
-  one-line, or off-topic answer should score low (30-55). Reserve 85+ for genuinely excellent delivery.
-- Every comment MUST quote or reference their EXACT words/phrases (use "quotes"). No generic,
-  copy-paste advice that could apply to any answer.
-- Name concrete problems you detect: filler words, hedging ("I think/maybe"), run-on sentences,
-  missing opening or closing, no specifics/evidence, off-topic content, weak verbs, no call to action.
-- If the answer is too short or empty to judge, say so plainly and score accordingly.
-- The "betterVersion" must rewrite THEIR actual content (same facts/intent) into a sharper version
-  with a strong opening and closing — not a generic template.
-- Tie one suggestion to ${roleModel}'s speaking style, referencing a specific technique they use.
+Do a DEEP, RIGOROUS, CRITICAL analysis — like a top executive speaking coach reviewing a recording line by line. You are NOT a cheerleader. Generic praise is forbidden.
 
-Return ONLY valid JSON with this exact shape:
+How to evaluate:
+1. First, judge whether the answer actually ACCOMPLISHES the scenario's goal ("${p?.scenarioTitle || ""}"). If it's off-topic, vague, or too short, scores must be low (25-50) and say so directly.
+2. Score each of the 6 dimensions 0-100 STRICTLY on the merit of THIS specific answer. Spread the scores — they should NOT all be similar; the weakest and strongest dimensions must differ clearly. Reserve 85+ only for genuinely excellent, professional delivery.
+3. For EVERY dimension, write a 1-2 sentence note that QUOTES their exact words and explains WHY that score — what specifically worked or failed (e.g. filler words, hedging like "I think/maybe", run-on sentences, missing opening/closing, no evidence/numbers, weak verbs, no call to action, vague nouns, no audience focus).
+4. Give 3-5 specific OBSERVATIONS as short bullet strings, each tied to their exact words.
+5. "betterVersion" must rewrite THEIR actual content (same facts/intent) into a noticeably stronger version with a strong hook and a clear closing — not a template with [brackets].
+6. Reference one concrete technique from ${roleModel}'s speaking style and how to apply it here.
+
+Return ONLY valid JSON with this exact shape (fill every field with specific, content-grounded text):
 {
   "transcript": "${hasAudio ? "the exact transcription of the audio" : "echo back their answer text"}",
   "overall": 0,
@@ -246,8 +247,18 @@ Return ONLY valid JSON with this exact shape:
   "empathy": 0,
   "persuasion": 0,
   "storytelling": 0,
-  "didWell": "1-2 sentences citing the exact strong phrase(s) they used",
-  "improve": "the single biggest weakness, quoting the exact words that need fixing and how",
+  "summary": "2-3 sentence honest verdict: did this answer achieve the goal, and the single most important thing to fix",
+  "aspectNotes": {
+    "clarity": "why this clarity score, quoting their words",
+    "confidence": "why this confidence score, quoting their words",
+    "structure": "why this structure score, quoting their words",
+    "empathy": "why this empathy score, quoting their words",
+    "persuasion": "why this persuasion score, quoting their words",
+    "storytelling": "why this storytelling score, quoting their words"
+  },
+  "observations": ["specific observation citing their words", "another", "another"],
+  "didWell": "the strongest thing they did, citing the exact phrase",
+  "improve": "the single biggest weakness, quoting the exact words and exactly how to fix it",
   "betterVersion": "their answer rewritten stronger, keeping their actual content",
   "microChallenge": "one concrete micro-challenge targeting their specific weakness"
 }`;
@@ -272,6 +283,21 @@ Return ONLY valid JSON with this exact shape:
     empathy: num(o.empathy),
     persuasion: num(o.persuasion),
     storytelling: num(o.storytelling),
+    summary: o.summary ? String(o.summary) : "",
+    aspectNotes:
+      o.aspectNotes && typeof o.aspectNotes === "object"
+        ? {
+            clarity: o.aspectNotes.clarity ? String(o.aspectNotes.clarity) : undefined,
+            confidence: o.aspectNotes.confidence ? String(o.aspectNotes.confidence) : undefined,
+            structure: o.aspectNotes.structure ? String(o.aspectNotes.structure) : undefined,
+            empathy: o.aspectNotes.empathy ? String(o.aspectNotes.empathy) : undefined,
+            persuasion: o.aspectNotes.persuasion ? String(o.aspectNotes.persuasion) : undefined,
+            storytelling: o.aspectNotes.storytelling ? String(o.aspectNotes.storytelling) : undefined,
+          }
+        : undefined,
+    observations: Array.isArray(o.observations)
+      ? o.observations.slice(0, 6).map((s: any) => String(s))
+      : undefined,
     didWell: String(o.didWell || ""),
     improve: String(o.improve || ""),
     betterVersion: String(o.betterVersion || ""),

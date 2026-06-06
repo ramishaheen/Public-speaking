@@ -440,6 +440,36 @@ export function generatePracticeFeedback(
     storytelling: "Tell it as a 30-second story: moment → action → lesson.",
   };
 
+  const aspectNotes = {
+    clarity: a.fillers.count
+      ? `${a.fillers.count} filler word(s) (${a.fillers.found.slice(0, 3).join(", ")}) and ${a.avgSentenceLen}-word avg sentences affect how clean this sounds.`
+      : `Average sentence length ${a.avgSentenceLen} words; aim for one clear idea per sentence.`,
+    confidence: a.hedges.count
+      ? `Hedging detected (${a.hedges.found.slice(0, 3).join(", ")}) — these soften your authority.`
+      : a.strong.count
+        ? `Good use of assertive language; ${a.hasClosing ? "and you closed firmly." : "but it ends without a firm close."}`
+        : "Few assertive verbs; add ownership ('I will', 'I can').",
+    structure: `${a.hasOpening ? "Has an opening" : "No clear opening"}, ${a.hasClosing ? "has a closing" : "no closing"}, ${a.connectors.count} signpost(s) across ${a.sentences} sentence(s).`,
+    empathy: a.audience.count
+      ? `${a.audience.count} audience-oriented word(s) (${a.audience.found.slice(0, 3).join(", ")})${a.hasQuestion ? " and a question" : ""} — you address the listener.`
+      : "No 'you'/'we' language — it reads inward, not to the listener.",
+    persuasion: `${a.value.count} benefit word(s)${a.hasNumbers ? ", includes a number/evidence" : ", no concrete evidence"}${a.hasClosing ? ", ends with a takeaway" : ", no call to action"}.`,
+    storytelling: a.story.count
+      ? `${a.story.count} narrative marker(s) (${a.story.found.slice(0, 3).join(", ")})${a.value.count ? " with a takeaway" : ""}.`
+      : "No story arc — anchor it in a moment, action, and lesson.",
+  };
+
+  const observations: string[] = [];
+  if (a.words < 15) observations.push(`Only ${a.words} words — too brief to show your skills; aim for 40-90.`);
+  if (a.fillers.count) observations.push(`Filler words used: ${a.fillers.found.slice(0, 4).join(", ")}.`);
+  if (a.hedges.count) observations.push(`Hedging phrases: ${a.hedges.found.slice(0, 4).join(", ")} — replace with definite statements.`);
+  if (!a.hasOpening) observations.push("No clear opening line — the listener can't orient.");
+  if (!a.hasClosing) observations.push("No closing line — it stops instead of landing the point.");
+  if (a.avgSentenceLen > 28) observations.push(`Average sentence is ${a.avgSentenceLen} words — break long sentences up.`);
+  if (a.connectors.count >= 2) observations.push(`Nice signposting with ${a.connectors.found.slice(0, 3).join(", ")}.`);
+  if (a.hasNumbers) observations.push("Used a concrete number/evidence — strengthens persuasion.");
+  if (observations.length === 0) observations.push("Solid, balanced answer — refine the weakest dimension below to level up.");
+
   return {
     overall,
     clarity,
@@ -448,6 +478,12 @@ export function generatePracticeFeedback(
     empathy,
     persuasion,
     storytelling,
+    summary:
+      a.words < 8
+        ? "Too short to evaluate properly — give a few full sentences so each skill is visible."
+        : `This answer scores ${overall}/100. Strongest: ${ranked[ranked.length - 1][0]}; weakest: ${weakest}. Focus there first.`,
+    aspectNotes,
+    observations: observations.slice(0, 5),
     didWell,
     improve: `Biggest lever — ${weakest} (${ranked[0][1]}/100): ${improveMap[weakest]}`,
     betterVersion: buildBetterVersion(scenarioId, response),

@@ -36,6 +36,17 @@ export interface PracticeFeedback {
   improve: string;
   betterVersion: string;
   microChallenge: string;
+  // Optional deep analysis (populated by the LLM evaluator).
+  summary?: string;
+  aspectNotes?: {
+    clarity?: string;
+    confidence?: string;
+    structure?: string;
+    empathy?: string;
+    persuasion?: string;
+    storytelling?: string;
+  };
+  observations?: string[];
 }
 
 export interface TrainingDay {
