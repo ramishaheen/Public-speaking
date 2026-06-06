@@ -416,23 +416,46 @@ function FeedbackReport({
         <span className="mb-1 text-sm text-mist">/ 100 overall</span>
       </div>
 
-      <div className="mt-4 space-y-2.5">
-        <ScoreBar label="Clarity" value={fb.clarity} />
-        <ScoreBar label="Confidence" value={fb.confidence} />
-        <ScoreBar label="Structure" value={fb.structure} />
-        <ScoreBar label="Empathy" value={fb.empathy} />
-        <ScoreBar label="Persuasion" value={fb.persuasion} />
-        <ScoreBar label="Storytelling" value={fb.storytelling} />
+      {fb.summary && (
+        <div className="mt-3 rounded-xl border border-neon/20 bg-neon/5 p-3.5">
+          <div className="terminal-text text-[10px] uppercase tracking-widest text-neon">Verdict</div>
+          <p className="mt-1 text-sm leading-relaxed text-white/90">{fb.summary}</p>
+        </div>
+      )}
+
+      <div className="mt-4 space-y-3">
+        <ScoreRow label="Clarity" value={fb.clarity} note={fb.aspectNotes?.clarity} />
+        <ScoreRow label="Confidence" value={fb.confidence} note={fb.aspectNotes?.confidence} />
+        <ScoreRow label="Structure" value={fb.structure} note={fb.aspectNotes?.structure} />
+        <ScoreRow label="Empathy" value={fb.empathy} note={fb.aspectNotes?.empathy} />
+        <ScoreRow label="Persuasion" value={fb.persuasion} note={fb.aspectNotes?.persuasion} />
+        <ScoreRow label="Storytelling" value={fb.storytelling} note={fb.aspectNotes?.storytelling} />
       </div>
+
+      {fb.observations && fb.observations.length > 0 && (
+        <div className="mt-4 rounded-xl border border-neon/10 bg-black/30 p-3.5">
+          <div className="terminal-text text-[10px] uppercase tracking-widest text-teal">
+            Detailed observations
+          </div>
+          <ul className="mt-2 space-y-1.5 text-sm leading-relaxed text-white/90">
+            {fb.observations.map((o, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="text-neon">›</span>
+                <span>{o}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="mt-4 space-y-3">
         <Block title="What you did well" tone="neon">
           {fb.didWell}
         </Block>
-        <Block title="Growth area" tone="gold">
+        <Block title="Biggest growth area" tone="gold">
           {fb.improve}
         </Block>
-        <Block title="Better version" tone="teal">
+        <Block title="Stronger version of your answer" tone="teal">
           {fb.betterVersion}
         </Block>
         <Block title="Micro-challenge" tone="neon">
@@ -443,6 +466,15 @@ function FeedbackReport({
       <div className="mt-4 rounded-xl border border-teal/30 bg-teal/5 p-3 text-xs text-mist">
         <span className="terminal-text text-teal">NEXT_CHALLENGE:</span> {onChallenge}
       </div>
+    </div>
+  );
+}
+
+function ScoreRow({ label, value, note }: { label: string; value: number; note?: string }) {
+  return (
+    <div>
+      <ScoreBar label={label} value={value} />
+      {note && <p className="mt-1 pl-0.5 text-xs leading-relaxed text-mist">{note}</p>}
     </div>
   );
 }
