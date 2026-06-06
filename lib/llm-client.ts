@@ -54,8 +54,10 @@ export async function requestPlan(payload: unknown): Promise<LLMPlan | null> {
   return data as LLMPlan;
 }
 
-export async function requestFeedback(payload: unknown): Promise<PracticeFeedback | null> {
+export type FeedbackWithTranscript = PracticeFeedback & { transcript?: string };
+
+export async function requestFeedback(payload: unknown): Promise<FeedbackWithTranscript | null> {
   const data = await post("feedback", payload);
   if (!data || typeof data.overall !== "number") return null;
-  return data as PracticeFeedback;
+  return data as FeedbackWithTranscript;
 }

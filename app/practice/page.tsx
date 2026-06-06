@@ -25,17 +25,24 @@ export default function PracticePage() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [recError, setRecError] = useState("");
   const [wasSpoken, setWasSpoken] = useState(false);
+  const [hasAudio, setHasAudio] = useState(false);
+  const [srSupported, setSrSupported] = useState(true);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<any>(null);
   const baseTextRef = useRef<string>("");
+  const audioBlobRef = useRef<Blob | null>(null);
 
   const scenario = PRACTICE_SCENARIOS.find((s) => s.id === scenarioId)!;
 
   // Detect whether Gemini is configured (key present in env).
   useEffect(() => {
     fetchLLMStatus().then((s) => setEngine(s.configured ? "gemini" : "mock"));
+    const SR =
+      (typeof window !== "undefined" && (window as any).SpeechRecognition) ||
+      (typeof window !== "undefined" && (window as any).webkitSpeechRecognition);
+    setSrSupported(!!SR);
   }, []);
 
   // -------- recording --------
@@ -50,7 +57,11 @@ export default function PracticePage() {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
       mr.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: chunksRef.current[0] ? (chunksRef.current[0] as Blob).type : "audio/webm" });
+        const blob = new Blob(chunksRef.current, {
+          type: mr.mimeType || (chunksRef.current[0] ? (chunksRef.current[0] as Blob).type : "audio/webm"),
+        });
+        audioBlobRef.current = blob;
+        setHasAudio(blob.size > 0);
         setAudioUrl(URL.createObjectURL(blob));
         stream.getTracks().forEach((t) => t.stop());
       };
@@ -109,39 +120,83 @@ export default function PracticePage() {
 
   const toggleRecording = () => (recording ? stopRecording() : startRecording());
 
+  const blobToBase64 = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(String(reader.result).split(",")[1] || "");
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+
   // -------- submit --------
   const submit = async () => {
-    if (!response.trim()) return;
+    const hasText = !!response.trim();
+    const canUseAudio = engine === "gemini" && !!audioBlobRef.current;
+    if (!hasText && !canUseAudio) {
+      setRecError(
+        "No answer to evaluate yet. Type your answer, or record again in Chrome/Edge/Safari for live transcription. (With a Gemini key, your voice recording is transcribed automatically.)",
+      );
+      return;
+    }
+    setRecError("");
     setAnalyzing(true);
     setFeedback(null);
 
-    let fb: PracticeFeedback | null = null;
+    const base = {
+      scenarioTitle: scenario.title,
+      coachLines: scenario.coachLines,
+      age: profile.age,
+      selectedGoals: profile.selectedGoals,
+      roleModelName: profile.roleModels[0] || profile.otherRoleModel || "",
+    };
+
+    let fb: (PracticeFeedback & { transcript?: string }) | null = null;
     let used: "gemini" | "mock" = "mock";
 
     if (engine === "gemini") {
-      fb = await requestFeedback({
-        response,
-        scenarioTitle: scenario.title,
-        coachLines: scenario.coachLines,
-        age: profile.age,
-        selectedGoals: profile.selectedGoals,
-        roleModelName: profile.roleModels[0] || profile.otherRoleModel || "",
-        audioTranscript: wasSpoken,
-      });
-      if (fb) used = "gemini";
+      // Prefer transcribing the actual audio (works in every browser).
+      if (audioBlobRef.current) {
+        try {
+          const data = await blobToBase64(audioBlobRef.current);
+          fb = await requestFeedback({
+            ...base,
+            response,
+            audio: { data, mimeType: audioBlobRef.current.type || "audio/webm" },
+          });
+        } catch {
+          fb = null;
+        }
+      }
+      // No audio (or audio failed) but we have text → evaluate the text.
+      if (!fb && hasText) {
+        fb = await requestFeedback({ ...base, response, audioTranscript: wasSpoken });
+      }
+      if (fb) {
+        used = "gemini";
+        if (fb.transcript && fb.transcript.trim()) setResponse(fb.transcript.trim());
+      }
     }
+
     if (!fb) {
-      // local mock fallback — keep UX snappy
+      // local mock fallback (text only — keep UX snappy)
+      if (!hasText) {
+        setAnalyzing(false);
+        setRecError(
+          "Voice evaluation needs a Gemini key. For now, type your answer (or use Chrome/Edge/Safari, which transcribes your voice live as you speak).",
+        );
+        return;
+      }
       await new Promise((r) => setTimeout(r, 600));
       fb = generatePracticeFeedback(response, scenarioId, profile);
       used = "mock";
     }
 
+    const finalResponse = fb.transcript && fb.transcript.trim() ? fb.transcript.trim() : response;
     const attempt: PracticeAttempt = {
       id: `${Date.now()}`,
       scenarioId,
       scenarioTitle: scenario.title,
-      response,
+      response: finalResponse,
       feedback: fb,
       createdAt: Date.now(),
     };
@@ -159,7 +214,10 @@ export default function PracticePage() {
     setResponse("");
     setAudioUrl(null);
     setWasSpoken(false);
+    setHasAudio(false);
     setUsedEngine(null);
+    setRecError("");
+    audioBlobRef.current = null;
   };
 
   if (!hydrated) {
@@ -259,9 +317,20 @@ export default function PracticePage() {
               )}
             </div>
             {recError && <p className="terminal-text mt-2 text-xs text-gold">! {recError}</p>}
+            {hasAudio && !recording && (
+              <p className="terminal-text mt-2 text-[11px] text-neon">
+                ✓ recording captured —{" "}
+                {engine === "gemini"
+                  ? "Gemini will transcribe & evaluate it when you submit."
+                  : "submit to evaluate (the live transcript is in the box above)."}
+              </p>
+            )}
             <p className="mt-1.5 text-[11px] text-mist">
-              Voice is recorded in your browser and transcribed live where supported (Chrome, Edge,
-              Safari). You can edit the transcript before submitting.
+              {engine === "gemini"
+                ? "Speak your answer and submit — Gemini transcribes the recording and evaluates it, in any browser."
+                : srSupported
+                  ? "Your voice is transcribed live into the box as you speak (Chrome, Edge, Safari). Edit it, then submit."
+                  : "This browser can't transcribe speech locally. Recording still works — type your answer, or use Chrome/Edge/Safari. (Adding a Gemini key enables voice in every browser.)"}
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">

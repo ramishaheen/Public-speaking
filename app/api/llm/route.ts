@@ -48,15 +48,20 @@ async function callGemini(opts: {
   system: string;
   user: string;
   temperature?: number;
+  audio?: { data: string; mimeType: string };
 }): Promise<string> {
   const key = process.env.GEMINI_API_KEY!;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`;
+  const parts: any[] = [{ text: opts.user }];
+  if (opts.audio?.data) {
+    parts.push({ inlineData: { mimeType: opts.audio.mimeType || "audio/webm", data: opts.audio.data } });
+  }
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: opts.system }] },
-      contents: [{ role: "user", parts: [{ text: opts.user }] }],
+      contents: [{ role: "user", parts }],
       generationConfig: {
         temperature: opts.temperature ?? 0.7,
         responseMimeType: "application/json",
@@ -187,6 +192,12 @@ Return ONLY valid JSON with this exact shape:
 // ---------------- FEEDBACK ----------------
 async function buildFeedback(p: any) {
   const roleModel = p?.roleModelName || "their chosen role model";
+  const hasAudio = !!p?.audio?.data;
+  const responseBlock = hasAudio
+    ? `The learner's answer is the ATTACHED AUDIO recording. First transcribe it word-for-word, then evaluate the transcription.`
+    : `LEARNER'S RESPONSE (this is ${p?.audioTranscript ? "a transcript of their spoken answer" : "their typed answer"}):
+"""${p?.response || ""}"""`;
+
   const user = `Evaluate this practice response as a professional public-speaking coach.
 
 Scenario: ${p?.scenarioTitle || ""}
@@ -195,13 +206,13 @@ Learner age: ${p?.age ?? "unknown"}. ${ageRules(p?.age ?? null)}
 Learner's role model / target style: ${roleModel}.
 Learner's current goals: ${JSON.stringify(p?.selectedGoals || [])}.
 
-LEARNER'S RESPONSE (this is ${p?.audioTranscript ? "a transcript of their spoken answer" : "their typed answer"}):
-"""${p?.response || ""}"""
+${responseBlock}
 
 Score each dimension 0-100 honestly (do not inflate). Give specific, kind, actionable feedback that nudges them toward ${roleModel}'s speaking style. The "betterVersion" must be a rewritten, stronger version of THEIR answer (same scenario), with a strong opening and closing.
 
 Return ONLY valid JSON with this exact shape:
 {
+  "transcript": "${hasAudio ? "the exact transcription of the audio" : "echo back their answer text"}",
   "overall": 0,
   "clarity": 0,
   "confidence": 0,
@@ -215,13 +226,19 @@ Return ONLY valid JSON with this exact shape:
   "microChallenge": "one concrete micro-challenge for next time"
 }`;
 
-  const text = await callGemini({ system: TRAINER_PERSONA, user, temperature: 0.6 });
+  const text = await callGemini({
+    system: TRAINER_PERSONA,
+    user,
+    temperature: 0.6,
+    audio: hasAudio ? p.audio : undefined,
+  });
   const o = parseJSON(text);
   const num = (v: any, d = 60) => {
     const n = Math.round(Number(v));
     return isNaN(n) ? d : Math.max(0, Math.min(100, n));
   };
   return {
+    transcript: o.transcript ? String(o.transcript) : "",
     overall: num(o.overall),
     clarity: num(o.clarity),
     confidence: num(o.confidence),
