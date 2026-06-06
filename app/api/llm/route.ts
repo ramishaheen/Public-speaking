@@ -18,6 +18,22 @@ export const runtime = "nodejs";
 
 const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
+// Resolve the Gemini API key tolerantly. Env var names are case-sensitive,
+// so accept the canonical name plus common variants and any case spelling
+// (e.g. GEMINI_API_KEY, Gemini_Api_key, gemini-api-key, GOOGLE_API_KEY).
+function geminiKey(): string | undefined {
+  const direct =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+    process.env.GOOGLE_API_KEY;
+  if (direct) return direct;
+  for (const [k, v] of Object.entries(process.env)) {
+    const norm = k.toLowerCase().replace(/[^a-z]/g, "");
+    if ((norm === "geminiapikey" || norm === "geminikey") && v) return v;
+  }
+  return undefined;
+}
+
 const TRAINER_PERSONA = `You are an elite professional public-speaking trainer, communication coach, and advisor with 20+ years of experience coaching executives, students, and world-class speakers.
 You are warm, encouraging, specific, and practical. You never use manipulative, romantic, sexual, aggressive, or unsafe coaching.
 You always keep advice respectful, inclusive, age-appropriate, and professional.
@@ -50,7 +66,7 @@ async function callGemini(opts: {
   temperature?: number;
   audio?: { data: string; mimeType: string };
 }): Promise<string> {
-  const key = process.env.GEMINI_API_KEY!;
+  const key = geminiKey()!;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${key}`;
   const parts: any[] = [{ text: opts.user }];
   if (opts.audio?.data) {
@@ -81,14 +97,14 @@ async function callGemini(opts: {
 
 export async function GET() {
   return NextResponse.json({
-    configured: !!process.env.GEMINI_API_KEY,
+    configured: !!geminiKey(),
     provider: "gemini",
     model: MODEL,
   });
 }
 
 export async function POST(req: NextRequest) {
-  if (!process.env.GEMINI_API_KEY) {
+  if (!geminiKey()) {
     return NextResponse.json({ configured: false });
   }
 
