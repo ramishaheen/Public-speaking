@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useProfile } from "@/lib/store";
 import { PRACTICE_SCENARIOS, EMOTIONAL_HOOKS } from "@/lib/content";
 import { generatePracticeFeedback, recomputeBadges, generateDailyChallenge } from "@/lib/ai";
+import { fetchLLMStatus, requestFeedback } from "@/lib/llm-client";
 import { PracticeAttempt, PracticeFeedback } from "@/lib/types";
 import { AppShell, SectionTitle } from "@/components/shell";
 import { TerminalHeader, TerminalStatusBar, RotatingText } from "@/components/terminal";
@@ -16,37 +17,149 @@ export default function PracticePage() {
   const [response, setResponse] = useState("");
   const [feedback, setFeedback] = useState<PracticeFeedback | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [engine, setEngine] = useState<"gemini" | "mock">("mock");
+  const [usedEngine, setUsedEngine] = useState<"gemini" | "mock" | null>(null);
+
+  // recording state
   const [recording, setRecording] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [recError, setRecError] = useState("");
+  const [wasSpoken, setWasSpoken] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const baseTextRef = useRef<string>("");
 
   const scenario = PRACTICE_SCENARIOS.find((s) => s.id === scenarioId)!;
 
-  const submit = () => {
+  // Detect whether Gemini is configured (key present in env).
+  useEffect(() => {
+    fetchLLMStatus().then((s) => setEngine(s.configured ? "gemini" : "mock"));
+  }, []);
+
+  // -------- recording --------
+  const startRecording = async () => {
+    setRecError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      chunksRef.current = [];
+      const mr = new MediaRecorder(stream);
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: chunksRef.current[0] ? (chunksRef.current[0] as Blob).type : "audio/webm" });
+        setAudioUrl(URL.createObjectURL(blob));
+        stream.getTracks().forEach((t) => t.stop());
+      };
+      mediaRecorderRef.current = mr;
+      mr.start();
+      setRecording(true);
+
+      // Live transcription via the Web Speech API where available (Chrome/Edge/Safari).
+      const SR: any =
+        (typeof window !== "undefined" && (window as any).SpeechRecognition) ||
+        (typeof window !== "undefined" && (window as any).webkitSpeechRecognition);
+      if (SR) {
+        baseTextRef.current = response ? response.trim() + " " : "";
+        const rec = new SR();
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = "en-US";
+        rec.onresult = (event: any) => {
+          let finalText = "";
+          let interim = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const tr = event.results[i];
+            if (tr.isFinal) finalText += tr[0].transcript;
+            else interim += tr[0].transcript;
+          }
+          if (finalText) baseTextRef.current += finalText + " ";
+          setResponse((baseTextRef.current + interim).trimStart());
+          setWasSpoken(true);
+        };
+        rec.onerror = () => {};
+        recognitionRef.current = rec;
+        try {
+          rec.start();
+        } catch {
+          /* ignore double-start */
+        }
+      }
+    } catch (e: any) {
+      setRecError(
+        "Microphone access was blocked. Allow mic permission in your browser, or type your answer instead.",
+      );
+      setRecording(false);
+    }
+  };
+
+  const stopRecording = () => {
+    try {
+      mediaRecorderRef.current?.stop();
+    } catch {}
+    try {
+      recognitionRef.current?.stop();
+    } catch {}
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    setRecording(false);
+  };
+
+  const toggleRecording = () => (recording ? stopRecording() : startRecording());
+
+  // -------- submit --------
+  const submit = async () => {
     if (!response.trim()) return;
     setAnalyzing(true);
     setFeedback(null);
-    // Simulate AI latency (swap for callLLM()).
-    setTimeout(() => {
-      const fb = generatePracticeFeedback(response, scenarioId, profile);
-      const attempt: PracticeAttempt = {
-        id: `${Date.now()}`,
-        scenarioId,
-        scenarioTitle: scenario.title,
+
+    let fb: PracticeFeedback | null = null;
+    let used: "gemini" | "mock" = "mock";
+
+    if (engine === "gemini") {
+      fb = await requestFeedback({
         response,
-        feedback: fb,
-        createdAt: Date.now(),
-      };
-      const attempts = [attempt, ...profile.attempts];
-      const newStreak = Math.max(profile.streak, Math.min(7, attempts.length));
-      const next = { ...profile, attempts, streak: newStreak };
-      update({ attempts, streak: newStreak, badges: recomputeBadges(next) });
-      setFeedback(fb);
-      setAnalyzing(false);
-    }, 1400);
+        scenarioTitle: scenario.title,
+        coachLines: scenario.coachLines,
+        age: profile.age,
+        selectedGoals: profile.selectedGoals,
+        roleModelName: profile.roleModels[0] || profile.otherRoleModel || "",
+        audioTranscript: wasSpoken,
+      });
+      if (fb) used = "gemini";
+    }
+    if (!fb) {
+      // local mock fallback — keep UX snappy
+      await new Promise((r) => setTimeout(r, 600));
+      fb = generatePracticeFeedback(response, scenarioId, profile);
+      used = "mock";
+    }
+
+    const attempt: PracticeAttempt = {
+      id: `${Date.now()}`,
+      scenarioId,
+      scenarioTitle: scenario.title,
+      response,
+      feedback: fb,
+      createdAt: Date.now(),
+    };
+    const attempts = [attempt, ...profile.attempts];
+    const newStreak = Math.max(profile.streak, Math.min(7, attempts.length));
+    const next = { ...profile, attempts, streak: newStreak };
+    update({ attempts, streak: newStreak, badges: recomputeBadges(next) });
+    setFeedback(fb);
+    setUsedEngine(used);
+    setAnalyzing(false);
   };
 
   const retry = () => {
     setFeedback(null);
     setResponse("");
+    setAudioUrl(null);
+    setWasSpoken(false);
+    setUsedEngine(null);
   };
 
   if (!hydrated) {
@@ -59,7 +172,7 @@ export default function PracticePage() {
 
   return (
     <AppShell active="practice">
-      <SectionTitle sub="An active AI coaching console. Pick a scenario, respond, and get instant feedback.">
+      <SectionTitle sub="An active AI coaching console. Pick a scenario, respond by voice or text, and get instant feedback.">
         Practice Room
       </SectionTitle>
 
@@ -68,7 +181,23 @@ export default function PracticePage() {
         <div className="overflow-hidden rounded-xl shadow-glass">
           <TerminalHeader path="C:\ETIHAD\SPEAKING_ROOM\PRACTICE_MODE" />
           <div className="glass rounded-b-xl border-t-0 p-5">
-            <div className="terminal-text text-[11px] text-neon">SYS_STATUS: [LIVE_PRACTICE]</div>
+            <div className="flex items-center justify-between">
+              <span className="terminal-text text-[11px] text-neon">SYS_STATUS: [LIVE_PRACTICE]</span>
+              <span
+                className={`terminal-text rounded-md border px-2 py-0.5 text-[10px] ${
+                  engine === "gemini"
+                    ? "border-neon/50 bg-neon/10 text-neon"
+                    : "border-steel bg-black/30 text-mist"
+                }`}
+                title={
+                  engine === "gemini"
+                    ? "Gemini is connected — evaluation is LLM-powered."
+                    : "No API key found — using the built-in mock coach. Add GEMINI_API_KEY to enable Gemini."
+                }
+              >
+                AI_ENGINE: [{engine === "gemini" ? "GEMINI" : "MOCK"}]
+              </span>
+            </div>
 
             <label className="terminal-text mt-4 block text-xs uppercase tracking-wide text-mist">
               Select scenario
@@ -102,25 +231,38 @@ export default function PracticePage() {
             </div>
 
             <label className="terminal-text mt-4 block text-xs uppercase tracking-wide text-mist">
-              Your response
+              Your response {wasSpoken && <span className="text-neon">(transcribed from voice)</span>}
             </label>
             <div className="mt-1.5">
-              <TextArea value={response} onChange={setResponse} placeholder="Type your answer here..." rows={6} />
+              <TextArea value={response} onChange={setResponse} placeholder="Type your answer here, or use the mic to speak it..." rows={6} />
             </div>
 
-            {/* Voice recording placeholder */}
-            <div className="mt-3 flex items-center gap-2">
+            {/* Voice recording (real) */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
-                onClick={() => setRecording((r) => !r)}
+                onClick={toggleRecording}
                 className={`terminal-text flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors ${
-                  recording ? "border-neon bg-neon/10 text-neon animate-pulseGlow" : "border-steel text-mist hover:border-neon/40"
+                  recording
+                    ? "border-neon bg-neon/10 text-neon animate-pulseGlow"
+                    : "border-steel text-mist hover:border-neon/40 hover:text-neon"
                 }`}
-                title="Voice recording is a UI placeholder — connect the Web Audio / MediaRecorder API later."
               >
-                {recording ? "● RECORDING…" : "🎙 Record audio (beta)"}
+                {recording ? "■ Stop recording" : "🎙 Record answer"}
               </button>
-              <span className="text-[11px] text-mist">Voice capture can be connected later.</span>
+              {audioUrl && !recording && (
+                <audio src={audioUrl} controls className="h-8 max-w-[220px]" />
+              )}
+              {recording && (
+                <span className="terminal-text text-[11px] text-neon">
+                  ● listening… <span className="animate-blink">▋</span>
+                </span>
+              )}
             </div>
+            {recError && <p className="terminal-text mt-2 text-xs text-gold">! {recError}</p>}
+            <p className="mt-1.5 text-[11px] text-mist">
+              Voice is recorded in your browser and transcribed live where supported (Chrome, Edge,
+              Safari). You can edit the transcript before submitting.
+            </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
               <PrimaryButton onClick={submit} disabled={analyzing || !response.trim()}>
@@ -130,7 +272,11 @@ export default function PracticePage() {
             </div>
 
             <TerminalStatusBar
-              items={["SYS_STATUS: [PRACTICE_MODE]", "FEEDBACK: [LIVE]", "CONFIDENCE_TRACKER: [ON]"]}
+              items={[
+                "SYS_STATUS: [PRACTICE_MODE]",
+                `FEEDBACK: [${engine === "gemini" ? "GEMINI" : "LIVE"}]`,
+                "CONFIDENCE_TRACKER: [ON]",
+              ]}
             />
           </div>
         </div>
@@ -142,7 +288,7 @@ export default function PracticePage() {
             {analyzing && (
               <div className="terminal-text space-y-1 text-sm text-neon/90">
                 <div>&gt; receiving response…</div>
-                <div>&gt; scoring clarity, confidence, structure…</div>
+                <div>&gt; {engine === "gemini" ? "sending to Gemini coach…" : "scoring clarity, confidence, structure…"}</div>
                 <div>&gt; drafting improvements… <span className="animate-blink">▋</span></div>
               </div>
             )}
@@ -159,7 +305,13 @@ export default function PracticePage() {
               </div>
             )}
 
-            {feedback && !analyzing && <FeedbackReport fb={feedback} onChallenge={generateDailyChallenge(profile)} />}
+            {feedback && !analyzing && (
+              <FeedbackReport
+                fb={feedback}
+                onChallenge={generateDailyChallenge(profile)}
+                engine={usedEngine}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -167,11 +319,28 @@ export default function PracticePage() {
   );
 }
 
-function FeedbackReport({ fb, onChallenge }: { fb: PracticeFeedback; onChallenge: string }) {
+function FeedbackReport({
+  fb,
+  onChallenge,
+  engine,
+}: {
+  fb: PracticeFeedback;
+  onChallenge: string;
+  engine: "gemini" | "mock" | null;
+}) {
   return (
     <div className="animate-fadeUp">
-      <div className="terminal-text text-[11px] uppercase tracking-widest text-neon">
-        COMMUNICATION FEEDBACK REPORT
+      <div className="flex items-center justify-between">
+        <div className="terminal-text text-[11px] uppercase tracking-widest text-neon">
+          COMMUNICATION FEEDBACK REPORT
+        </div>
+        <span
+          className={`terminal-text rounded-md border px-2 py-0.5 text-[10px] ${
+            engine === "gemini" ? "border-neon/50 bg-neon/10 text-neon" : "border-steel bg-black/30 text-mist"
+          }`}
+        >
+          {engine === "gemini" ? "evaluated by Gemini" : "mock evaluation"}
+        </span>
       </div>
       <div className="mt-3 flex items-end gap-3">
         <span className="text-4xl font-extrabold text-glow text-white">{fb.overall}</span>

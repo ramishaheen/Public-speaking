@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useProfile } from "@/lib/store";
+import { requestPlan, fetchLLMStatus, LLMPlan } from "@/lib/llm-client";
 import {
   ASSESSMENT_QUESTIONS,
   BARRIER_OPTIONS,
@@ -80,6 +81,8 @@ export default function OnboardingPage() {
   const { profile, update, hydrated } = useProfile();
   const [idx, setIdx] = useState(0);
   const [validation, setValidation] = useState("");
+  const [llmPlan, setLlmPlan] = useState<LLMPlan | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
 
   const step = STEPS[idx];
   const go = (n: number) => {
@@ -92,6 +95,57 @@ export default function OnboardingPage() {
 
   // Live computed profile (used by initial profile, growth, challenge, plan).
   const computed = useMemo(() => generateCommunicationProfile(profile), [profile]);
+
+  // When the user reaches the final plan, ask Gemini (if configured) to
+  // rebuild the plan from ALL answers, tailored to the chosen role model.
+  useEffect(() => {
+    if (step !== "plan") return;
+    let active = true;
+    setLlmPlan(null);
+    fetchLLMStatus().then((s) => {
+      if (!s.configured || !active) return;
+      setPlanLoading(true);
+      requestPlan({
+        selectedGoals: profile.selectedGoals,
+        age: profile.age,
+        roleModel: computed.roleModel,
+        powerSkillAwareness: profile.powerSkillAwareness,
+        scores: computed.scores,
+        profileTitle: computed.profileTitle,
+        scenarioStory: profile.scenarioStory,
+        scenarioNetworking: profile.scenarioNetworking,
+        presentationFeeling: profile.presentationFeeling,
+        criticismReaction: profile.criticismReaction,
+        selfGrowthBarrier: profile.selfGrowthBarrier,
+        otherBarrier: profile.otherBarrier,
+        selectedPowerSkill: profile.selectedPowerSkill,
+        learningStyle: profile.learningStyle,
+        favoriteLearningTime: profile.favoriteLearningTime,
+        dailyIntensity: `${computed.intensity.label} — ${computed.intensity.range}`,
+        selfReflects: profile.selfReflects,
+        friendlyPush: profile.friendlyPush,
+        practiceBelief: profile.practiceBelief,
+        finishesWhatStarts: profile.finishesWhatStarts,
+        learnerChallengeType: computed.learnerChallengeType,
+      })
+        .then((plan) => {
+          if (active && plan) {
+            setLlmPlan(plan);
+            // Persist the LLM-tailored plan so the dashboard uses it too.
+            update({
+              strengths: plan.strengths,
+              growthAreas: plan.growthAreas,
+              trainingPlan: plan.trainingPlan,
+            });
+          }
+        })
+        .finally(() => active && setPlanLoading(false));
+    });
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
 
   const baseStatus = [
     "SYS_STATUS: [READY]",
@@ -958,13 +1012,28 @@ export default function OnboardingPage() {
   // ---------------- FINAL PLAN ----------------
   if (step === "plan") {
     const rm = computed.roleModel;
+    const strengths = llmPlan?.strengths ?? computed.strengths;
+    const growthAreas = llmPlan?.growthAreas ?? computed.growthAreas;
+    const motivationalQuote = llmPlan?.motivationalQuote ?? computed.motivationalQuote;
+    const trainingPlan = llmPlan?.trainingPlan ?? computed.trainingPlan;
     return wrap(
       <div className="mx-auto w-full max-w-3xl animate-fadeUp">
         <div className="overflow-hidden rounded-xl shadow-glass">
           <TerminalHeader path="C:\ETIHAD\SPEAKING_ROOM\TRAINING_PLAN" />
           <div className="glass rounded-b-xl border-t-0 p-5 sm:p-8">
-            <div className="terminal-text text-[11px] uppercase tracking-widest text-neon">
-              VOICE INTO INFLUENCE MODE: ON
+            <div className="flex items-center justify-between">
+              <div className="terminal-text text-[11px] uppercase tracking-widest text-neon">
+                VOICE INTO INFLUENCE MODE: ON
+              </div>
+              {planLoading ? (
+                <span className="terminal-text rounded-md border border-teal/40 bg-teal/10 px-2 py-0.5 text-[10px] text-teal">
+                  Gemini tailoring… <span className="animate-blink">▋</span>
+                </span>
+              ) : llmPlan ? (
+                <span className="terminal-text rounded-md border border-neon/50 bg-neon/10 px-2 py-0.5 text-[10px] text-neon">
+                  tailored by Gemini to {rm.name}
+                </span>
+              ) : null}
             </div>
             <h1 className="mt-2 text-2xl font-extrabold text-white sm:text-3xl">
               Your Personalized Speaking Room Plan
@@ -989,13 +1058,16 @@ export default function OnboardingPage() {
               <p className="mt-1 text-sm text-white/90">
                 <span className="font-semibold text-white">{rm.name}</span> — {rm.line}
               </p>
+              {llmPlan?.roleModelInsight && (
+                <p className="mt-2 text-sm text-teal/90">{llmPlan.roleModelInsight}</p>
+              )}
             </div>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <div className="rounded-xl border border-neon/15 bg-black/30 p-4">
                 <div className="terminal-text text-[10px] uppercase tracking-widest text-mist">KEY STRENGTHS</div>
                 <ul className="mt-2 space-y-1.5 text-sm text-white/85">
-                  {computed.strengths.map((s, i) => (
+                  {strengths.map((s, i) => (
                     <li key={i}>
                       <span className="text-neon">+</span> {s}
                     </li>
@@ -1005,7 +1077,7 @@ export default function OnboardingPage() {
               <div className="rounded-xl border border-neon/15 bg-black/30 p-4">
                 <div className="terminal-text text-[10px] uppercase tracking-widest text-mist">GROWTH AREAS</div>
                 <ul className="mt-2 space-y-1.5 text-sm text-white/85">
-                  {computed.growthAreas.map((g, i) => (
+                  {growthAreas.map((g, i) => (
                     <li key={i}>
                       <span className="text-gold">→</span> {g}
                     </li>
@@ -1020,12 +1092,12 @@ export default function OnboardingPage() {
             </div>
 
             <div className="mt-5">
-              <MotivationCard>{computed.motivationalQuote}</MotivationCard>
+              <MotivationCard>{motivationalQuote}</MotivationCard>
             </div>
 
             <h2 className="mt-7 text-lg font-bold text-white">Your 7-Day Plan</h2>
             <div className="mt-3 space-y-2.5">
-              {computed.trainingPlan.map((d) => (
+              {trainingPlan.map((d) => (
                 <div key={d.day} className="flex gap-3 rounded-xl border border-neon/15 bg-black/30 p-3.5">
                   <div className="terminal-text flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border border-neon/40 bg-neon/10 text-sm font-bold text-neon">
                     {d.day}

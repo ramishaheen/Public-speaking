@@ -118,36 +118,55 @@ export function generateTrainingPlan(p: UserProfile): TrainingDay[] {
         ? "a friend or your class"
         : "a friend or your family";
 
+  const role = p.roleModels[0] || p.otherRoleModel || "";
+  const roleTag = role ? ` Channel ${role}'s style as you do it.` : "";
+  const style = (p.learningStyle || "").toLowerCase();
+  const min = `(~${intensity.minutes} min)`;
+
+  // Learning-style aware day-3 / day-6 framing.
+  const styleDay = style.includes("roleplay")
+    ? "Run an AI roleplay in the Practice Room and respond out loud."
+    : style.includes("theor")
+      ? "Study one framework (e.g. STAR or Hook-Point-Close), then apply it once."
+      : style.includes("real-life") || style.includes("scenario")
+        ? "Use a real situation from your week and rehearse how you would handle it."
+        : "Do a short hands-on drill and repeat it twice.";
+
+  const day5 =
+    p.presentationFeeling === "Very nervous" || p.presentationFeeling === "I avoid presentations"
+      ? "Practice slow breathing and a calm power-pose, then rehearse two strong opening lines."
+      : "Rehearse two strong opening lines and one memorable closing line.";
+
   return [
     {
       day: 1,
       title: "Speak Clearly",
-      task: `Practice explaining one idea in 60 seconds. Aim for one clear opening line. (~${intensity.minutes} min)`,
+      task: `Practice explaining one idea in 60 seconds with one clear opening line.${roleTag} ${min}`,
     },
     {
       day: 2,
       title: "Build Confidence",
-      task: "Record yourself speaking about a simple topic you enjoy. Listen back once and note one strength.",
+      task: `Record yourself speaking about a topic you enjoy. Listen back once and note one strength. ${min}`,
     },
     {
       day: 3,
-      title: "Storytelling",
-      task: "Tell a short story using the structure: Situation → Challenge → Action → Lesson.",
+      title: `Your Way of Learning`,
+      task: `${styleDay} Focus on ${skill}. ${min}`,
     },
     {
       day: 4,
       title: "Body Language",
-      task: "Practice posture, eye contact, and calm hand movement in front of a mirror or camera.",
+      task: `Practice posture, eye contact, and calm hand movement in front of a mirror or camera. ${min}`,
     },
     {
       day: 5,
       title: "Handle Nervousness",
-      task: "Practice slow breathing and rehearse two strong opening lines before you speak.",
+      task: `${day5} ${min}`,
     },
     {
       day: 6,
       title: "Mini Presentation",
-      task: `Give a 2-minute presentation about ${skill} to ${audience}.`,
+      task: `Give a 2-minute presentation about ${skill} to ${audience}.${roleTag}`,
     },
     {
       day: 7,
