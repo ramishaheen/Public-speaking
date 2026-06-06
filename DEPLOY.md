@@ -22,15 +22,29 @@ The app is a standard Next.js project and needs **no environment variables** to 
 - Every push to the connected branch redeploys automatically.
 - Preview deployments are created for each PR.
 
-## Connecting a real LLM later (optional)
+## Turning on the Gemini AI coach (when your key is ready)
 
-In Vercel → Project → **Settings → Environment Variables**, add one of:
+The app runs fine with **no key** (built-in mock coach). To switch the plan and
+practice evaluation to **real Gemini**, no code change is needed — just add the key:
 
-```
-ANTHROPIC_API_KEY=...   # Claude  (model: claude-opus-4-8)
-OPENAI_API_KEY=...      # OpenAI
-GEMINI_API_KEY=...      # Gemini
-```
+1. Get a key from **https://aistudio.google.com/app/apikey**.
+2. In Vercel → your project → **Settings → Environment Variables**, add:
 
-Then uncomment the matching block in `app/api/coach/route.ts` and route
-`callLLM()` in `lib/ai.ts` through `/api/coach`. The mock stays as a fallback.
+   ```
+   GEMINI_API_KEY = your_key_here
+   ```
+   (Optional) pin a model with `GEMINI_MODEL = gemini-2.5-flash` (the default).
+
+3. **Redeploy** (Deployments → ⋯ → Redeploy, or push any commit).
+
+Once the key is present:
+- The Practice Room badge flips from `AI_ENGINE: [MOCK]` to `[GEMINI]`.
+- The personalized plan is rebuilt by Gemini from **all** onboarding answers and
+  **tailored to the selected role model's speaking style**.
+- Practice responses (typed or voice-transcribed) are evaluated by Gemini.
+- If the key is ever invalid or the API is down, the app silently falls back to
+  the mock coach — it never breaks.
+
+The key stays server-side (used only in the `/api/llm` route); it is never exposed
+to the browser.
+
