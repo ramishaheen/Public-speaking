@@ -375,8 +375,20 @@ Return ONLY valid JSON:
     {"title": "short name", "gap": "what they believe vs what data shows, citing specifics", "why": "why it matters for speaking", "fix": "how to address it"}
   ],
   "priorityFocus": "the single most important thing to work on next, and why",
-  "nextSteps": ["3 concrete next steps"]
-}`;
+  "nextSteps": ["3 concrete next steps"],
+  "reliability": {
+    "trust": "1-2 sentences: how much to trust this report and why, based on how many practice attempts and how clean the EEG signal was. Be honest if data is thin.",
+    "validate": ["3 concrete ways the learner can validate these results themselves — e.g. re-run the focus test 2-3 times and check scores agree within ~10 points; check whether EEG focus, voice metrics, and their own felt experience point the same way; compare a recorded practice to this report"]
+  },
+  "prePresentationPlan": [
+    {"when": "The week before", "items": ["2-3 specific drills targeting their weakest skills and blind spots"]},
+    {"when": "The day before", "items": ["2-3 specific rehearsal/prep actions"]},
+    {"when": "1 hour before", "items": ["2-3 warm-ups: voice, breathing, focus priming"]},
+    {"when": "5 minutes before", "items": ["2-3 quick centering actions to steady nerves and focus"]}
+  ]
+}
+
+The prePresentationPlan must be tailored to THIS learner's weakest skills, blind spots, and (if present) EEG focus stability — not generic. Tie vocal warm-ups to any monotone/pace issues, and focus-priming to any EEG instability.`;
 
   const text = await callGemini({ system: TRAINER_PERSONA, user, temperature: 0.6 });
   const o = parseJSON(text);
@@ -404,5 +416,17 @@ Return ONLY valid JSON:
     })),
     priorityFocus: String(o.priorityFocus || ""),
     nextSteps: (o.nextSteps || []).slice(0, 5).map(String),
+    reliability: o.reliability
+      ? {
+          trust: String(o.reliability.trust || ""),
+          validate: (o.reliability.validate || []).slice(0, 5).map(String),
+        }
+      : undefined,
+    prePresentationPlan: Array.isArray(o.prePresentationPlan)
+      ? o.prePresentationPlan.slice(0, 5).map((g: any) => ({
+          when: String(g.when || ""),
+          items: (g.items || []).slice(0, 5).map(String),
+        }))
+      : undefined,
   };
 }
