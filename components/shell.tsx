@@ -9,7 +9,7 @@ export function AppShell({
   active,
 }: {
   children: React.ReactNode;
-  active?: "dashboard" | "practice" | "admin";
+  active?: "dashboard" | "practice" | "admin" | "neuroscience";
 }) {
   return (
     <div className="mx-auto min-h-screen max-w-6xl px-4 py-6 sm:px-6">
@@ -25,6 +25,7 @@ export function AppShell({
         <nav className="flex flex-wrap gap-2 terminal-text text-xs">
           <NavLink href="/dashboard" label="DASHBOARD" active={active === "dashboard"} />
           <NavLink href="/practice" label="PRACTICE_ROOM" active={active === "practice"} />
+          <NavLink href="/neuroscience" label="NEUROSCIENCE" active={active === "neuroscience"} />
           <NavLink href="/admin" label="ADMIN" active={active === "admin"} />
           <NavLink href="/" label="RESTART" active={false} />
         </nav>

@@ -96,12 +96,18 @@ export default function DashboardPage() {
                 value={`${profile.streak} day${profile.streak === 1 ? "" : "s"} 🔥`}
               />
             </div>
-            <div className="mt-4">
+            <div className="mt-4 flex flex-wrap gap-2.5">
               <Link
                 href="/practice"
                 className="inline-block rounded-xl border border-neon/60 bg-neon/10 px-5 py-2.5 font-semibold text-neon hover:bg-neon/20"
               >
                 Continue Practice ›
+              </Link>
+              <Link
+                href="/neuroscience"
+                className="inline-flex items-center gap-2 rounded-xl border border-teal/50 bg-teal/10 px-5 py-2.5 font-semibold text-teal hover:bg-teal/20"
+              >
+                🧠 NeuroScience ›
               </Link>
             </div>
           </div>
