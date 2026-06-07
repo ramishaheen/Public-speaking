@@ -257,6 +257,58 @@ function Report({
         </div>
       )}
 
+      {report.prePresentationPlan && report.prePresentationPlan.length > 0 && (
+        <div className="mt-6">
+          <h3 className="text-sm font-bold uppercase tracking-widest text-teal">
+            🎤 Pre-presentation prep plan
+          </h3>
+          <p className="text-[11px] text-mist">
+            Specific practices to run before your talk, built from this report.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {report.prePresentationPlan.map((ph, i) => (
+              <div key={i} className="rounded-xl border border-teal/25 bg-teal/5 p-3.5">
+                <div className="terminal-text text-[10px] uppercase tracking-widest text-teal">
+                  {ph.when}
+                </div>
+                <ul className="mt-2 space-y-1.5 text-sm text-white/90">
+                  {ph.items.map((it, j) => (
+                    <li key={j} className="flex gap-2">
+                      <span className="text-teal">›</span>
+                      <span>{it}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {report.reliability && (
+        <div className="mt-6 rounded-xl border border-steel bg-black/30 p-4">
+          <div className="terminal-text text-[10px] uppercase tracking-widest text-mist">
+            ✅ How reliable is this — and how to validate it
+          </div>
+          <p className="mt-2 text-sm text-white/90">{report.reliability.trust}</p>
+          {report.reliability.validate?.length > 0 && (
+            <ul className="mt-2 space-y-1.5 text-sm text-white/85">
+              {report.reliability.validate.map((v, i) => (
+                <li key={i} className="flex gap-2">
+                  <span className="text-neon">✓</span>
+                  <span>{v}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-2 text-[10px] leading-snug text-mist">
+            Scores are evidence-based estimates from your speech content, measured voice delivery,
+            and (optional) single-channel EEG — they <b>may indicate</b> skill trends but are coaching
+            guidance, not a clinical or absolute measurement.
+          </p>
+        </div>
+      )}
+
       <div className="mt-6 flex flex-wrap gap-2">
         <PrimaryButton onClick={onRegen}>Regenerate</PrimaryButton>
         <Link href="/practice">

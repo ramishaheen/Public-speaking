@@ -415,6 +415,47 @@ export function generateSkillsStatus(p: UserProfile): any {
       "Do a NeuroScience focus session to baseline your composure under pressure.",
       "Re-generate this report weekly to track movement and new blind spots.",
     ],
+    reliability: {
+      trust: attempts.length >= 5
+        ? `Medium confidence — based on ${attempts.length} practice attempt(s). The more sessions you log, the more reliable each number.`
+        : `Low confidence — only ${attempts.length} practice attempt(s) so far. Treat these as directional, not definitive.`,
+      validate: [
+        "Re-run the NeuroScience focus test 2-3 times: real scores should agree within ~10 points. Big swings usually mean poor headset contact, not real change.",
+        "Cross-check signals: when your EEG focus, your measured voice delivery, and how you actually felt all point the same way, trust it more.",
+        `Record the same answer twice in the Practice Room — a reliable score lands close both times for ${weakest.name.toLowerCase()}.`,
+      ],
+    },
+    prePresentationPlan: [
+      {
+        when: "The week before",
+        items: [
+          `Do 5 Practice Room reps on ${weakest.name.toLowerCase()} — your priority skill.`,
+          "Rehearse your opening and closing until they feel automatic.",
+        ],
+      },
+      {
+        when: "The day before",
+        items: [
+          "Run your full talk out loud once, recording it; review the voice metrics for pace and filler words.",
+          "Sleep — fatigue shows up as drift in your focus timeline.",
+        ],
+      },
+      {
+        when: "1 hour before",
+        items: [
+          "Vocal warm-up: hum, lip trills, and read a paragraph with exaggerated intonation to avoid monotone.",
+          "Box breathing (4-4-4-4) for 2 minutes to steady your nervous system.",
+          "One NeuroScience focus session to prime attention and confirm a calm baseline.",
+        ],
+      },
+      {
+        when: "5 minutes before",
+        items: [
+          "Three slow breaths, feet grounded, shoulders down.",
+          "Say your first line silently once — a locked opening calms the rest.",
+        ],
+      },
+    ],
   };
 }
 

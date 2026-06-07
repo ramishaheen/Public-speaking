@@ -75,6 +75,10 @@ export interface BlindSpot {
   why: string;
   fix: string;
 }
+export interface PrepPhase {
+  when: string;
+  items: string[];
+}
 export interface SkillsStatus {
   headline: string;
   overall: number;
@@ -84,6 +88,8 @@ export interface SkillsStatus {
   blindSpots: BlindSpot[];
   priorityFocus: string;
   nextSteps: string[];
+  reliability?: { trust: string; validate: string[] };
+  prePresentationPlan?: PrepPhase[];
 }
 
 export async function requestSkillsStatus(payload: unknown): Promise<SkillsStatus | null> {
