@@ -309,35 +309,43 @@ export interface FocusResult {
   durationSec: number;
   samples: number[];
   createdAt: number;
+  noData?: boolean; // true when no usable EEG signal was captured
+  validSamples?: number;
 }
 
 export function analyzeFocus(samples: number[], durationSec: number): FocusResult {
-  if (samples.length === 0) {
+  // Only count real, non-zero readings — a MindWave reports 0 when there is
+  // no clean signal, so an all-zero session means nothing was captured.
+  const valid = samples.filter((s) => s > 0);
+  if (valid.length < 3) {
     return {
       focusScore: 0,
       stability: 0,
       peak: 0,
       timeInFlowPct: 0,
       durationSec,
-      samples: [],
+      samples,
       createdAt: Date.now(),
+      noData: true,
+      validSamples: valid.length,
     };
   }
-  const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
-  const variance =
-    samples.reduce((a, b) => a + (b - avg) ** 2, 0) / samples.length;
+  const avg = valid.reduce((a, b) => a + b, 0) / valid.length;
+  const variance = valid.reduce((a, b) => a + (b - avg) ** 2, 0) / valid.length;
   const sd = Math.sqrt(variance);
   const stability = Math.max(0, Math.min(100, Math.round(100 - sd * 2.2)));
-  const peak = Math.max(...samples);
-  const inFlow = samples.filter((s) => s >= 70).length;
+  const peak = Math.max(...valid);
+  const inFlow = valid.filter((s) => s >= 70).length;
   return {
     focusScore: Math.round(avg),
     stability,
     peak,
-    timeInFlowPct: Math.round((inFlow / samples.length) * 100),
+    timeInFlowPct: Math.round((inFlow / valid.length) * 100),
     durationSec,
     samples,
     createdAt: Date.now(),
+    noData: false,
+    validSamples: valid.length,
   };
 }
 
