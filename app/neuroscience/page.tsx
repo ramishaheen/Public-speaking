@@ -36,6 +36,7 @@ export default function NeurosciencePage() {
   const [last, setLast] = useState<FocusResult | null>(null);
   const [hasSignal, setHasSignal] = useState(false); // a real, non-zero EEG reading arrived
   const [bands, setBands] = useState<BandPowers | null>(null);
+  const [poorSignal, setPoorSignal] = useState(200); // 0 = perfect contact, 200 = none
 
   const handleRef = useRef<EEGHandle | null>(null);
   const samplesRef = useRef<number[]>([]);
@@ -91,6 +92,7 @@ export default function NeurosciencePage() {
     setStatusDetail("");
     setHasSignal(false);
     setBands(null);
+    setPoorSignal(200);
     samplesRef.current = [];
     startCamera(); // show webcam preview during connect + session
     handleRef.current?.stop();
@@ -99,9 +101,10 @@ export default function NeurosciencePage() {
       (s) => {
         setAttention(s.attention);
         setMeditation(s.meditation);
+        setPoorSignal(s.poorSignal);
         if (s.bands) setBands(s.bands);
-        // Only a clean, non-zero attention reading counts as a real signal.
-        if (s.attention > 0 && s.poorSignal < 200) setHasSignal(true);
+        // A real signal needs a non-zero reading AND decent electrode contact.
+        if (s.attention > 0 && s.poorSignal < 50) setHasSignal(true);
       },
       (st, detail) => {
         setStatus(st);
@@ -254,6 +257,9 @@ export default function NeurosciencePage() {
               <MiniStat label="Attention" value={attention} />
               <MiniStat label="Calm" value={meditation} />
             </div>
+            {mode === "device" && (phase === "connecting" || phase === "running") && (
+              <SignalQuality poor={poorSignal} />
+            )}
             {phase === "running" && (
               <p className="mt-4 text-center text-xs text-mist">
                 Keep speaking your rehearsed opening aloud. Stay present — let your focus drive the meter.
@@ -522,6 +528,37 @@ function ResultsPanel({
 }
 
 // ---------------- Small UI bits ----------------
+function SignalQuality({ poor }: { poor: number }) {
+  // poor: 0 = perfect contact, 200 = no contact.
+  const quality = Math.max(0, Math.min(100, Math.round(100 - (poor / 200) * 100)));
+  const good = poor < 50;
+  const label =
+    poor >= 200 ? "No contact" : poor >= 100 ? "Very poor" : poor >= 50 ? "Weak" : poor > 0 ? "Good" : "Excellent";
+  const color = good ? "#39FF14" : poor >= 100 ? "#ef4444" : "#E6B800";
+  return (
+    <div className="mt-3 w-full rounded-xl border border-steel bg-black/30 p-3">
+      <div className="flex items-center justify-between">
+        <span className="terminal-text text-[10px] uppercase tracking-widest text-mist">
+          Headset contact
+        </span>
+        <span className="terminal-text text-xs" style={{ color }}>
+          {label} ({quality}%)
+        </span>
+      </div>
+      <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full border border-steel bg-black/50">
+        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${quality}%`, backgroundColor: color }} />
+      </div>
+      {!good && (
+        <p className="mt-2 text-[11px] leading-snug text-gold">
+          Contact is weak, so Attention/Calm read near 0 and the bands are mostly noise. Press the
+          <b> forehead sensor onto bare skin</b> (above the eyebrow, move hair aside) and clip the
+          <b> ear contact firmly on your earlobe</b>. Sit still — it clears in a few seconds.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function BrainwavesPanel({ bands }: { bands: BandPowers | null }) {
   return (
     <div className="mt-4 rounded-xl border border-neon/15 bg-black/40 p-4">
