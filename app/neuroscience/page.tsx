@@ -38,11 +38,47 @@ export default function NeurosciencePage() {
   const samplesRef = useRef<number[]>([]);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Webcam preview (see yourself present while focus is measured).
+  const [camOn, setCamOn] = useState(false);
+  const [camError, setCamError] = useState("");
+  const camStreamRef = useRef<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  const startCamera = async () => {
+    setCamError("");
+    if (camStreamRef.current) {
+      setCamOn(true);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      camStreamRef.current = stream;
+      setCamOn(true);
+    } catch {
+      setCamError("Camera blocked — allow camera access to see yourself present (optional).");
+      setCamOn(false);
+    }
+  };
+
+  const stopCamera = () => {
+    camStreamRef.current?.getTracks().forEach((t) => t.stop());
+    camStreamRef.current = null;
+    setCamOn(false);
+  };
+
+  // Bind the camera stream to the <video> element whenever it mounts.
+  useEffect(() => {
+    if (videoRef.current && camStreamRef.current) {
+      videoRef.current.srcObject = camStreamRef.current;
+    }
+  }, [camOn, phase]);
+
   useEffect(() => {
     setLast(loadFocusResult());
     return () => {
       handleRef.current?.stop();
       if (tickRef.current) clearInterval(tickRef.current);
+      camStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);
 
@@ -52,6 +88,7 @@ export default function NeurosciencePage() {
     setStatusDetail("");
     setHasSignal(false);
     samplesRef.current = [];
+    startCamera(); // show webcam preview during connect + session
     handleRef.current?.stop();
     handleRef.current = startEEG(
       m,
@@ -95,6 +132,7 @@ export default function NeurosciencePage() {
   const finishSession = () => {
     if (tickRef.current) clearInterval(tickRef.current);
     handleRef.current?.stop();
+    stopCamera();
     const r = analyzeFocus(samplesRef.current, SESSION_SECONDS);
     setResult(r);
     // Only persist a real session (don't store an empty "no signal" run).
@@ -108,6 +146,7 @@ export default function NeurosciencePage() {
   const reset = () => {
     handleRef.current?.stop();
     if (tickRef.current) clearInterval(tickRef.current);
+    stopCamera();
     setPhase("intro");
     setStatus("idle");
     setAttention(0);
@@ -188,6 +227,9 @@ export default function NeurosciencePage() {
         <div className="overflow-hidden rounded-xl shadow-glass">
           <TerminalHeader path="C:\ETIHAD\SPEAKING_ROOM\NEURO\LIVE_FOCUS" />
           <div className="glass flex min-h-[320px] flex-col items-center justify-center rounded-b-xl border-t-0 p-5">
+            {(phase === "connecting" || phase === "running") && (
+              <CameraView videoRef={videoRef} on={camOn} error={camError} live={phase === "running"} />
+            )}
             <FocusGauge
               value={phase === "results" && result && !result.noData ? result.focusScore : attention}
               live={phase === "running"}
@@ -238,9 +280,13 @@ function IntroPanel({
 
       <div className="mt-4 grid gap-2 sm:grid-cols-3">
         <Step n={1} t="Connect" d="Pair your MindWave or pick Simulation." />
-        <Step n={2} t="Speak & focus" d="Deliver your opening for 60s." />
+        <Step n={2} t="Speak on camera" d="Present for 60s while it reads focus." />
         <Step n={3} t="Get insights" d="Focus score + how to steady it." />
       </div>
+      <p className="mt-3 text-[11px] text-mist">
+        📷 Your <span className="text-teal">webcam</span> turns on so you can watch yourself present
+        (the video stays on your device — nothing is uploaded). Allow camera access when prompted.
+      </p>
 
       <div className="mt-5 flex flex-wrap gap-2">
         <PrimaryButton onClick={() => onConnect("device")}>Connect MindWave</PrimaryButton>
@@ -467,6 +513,47 @@ function ResultsPanel({
 }
 
 // ---------------- Small UI bits ----------------
+function CameraView({
+  videoRef,
+  on,
+  error,
+  live,
+}: {
+  videoRef: React.RefObject<HTMLVideoElement>;
+  on: boolean;
+  error: string;
+  live: boolean;
+}) {
+  return (
+    <div className="mb-4 w-full">
+      <div className="relative w-full overflow-hidden rounded-xl border border-steel bg-black/60">
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          playsInline
+          className={`h-44 w-full object-cover ${on ? "" : "hidden"}`}
+          style={{ transform: "scaleX(-1)" }}
+        />
+        {!on && (
+          <div className="flex h-44 w-full flex-col items-center justify-center text-center">
+            <div className="text-2xl">📷</div>
+            <p className="mt-1 max-w-[220px] text-[11px] text-mist">
+              {error || "Starting camera… allow access to watch yourself present."}
+            </p>
+          </div>
+        )}
+        {on && live && (
+          <div className="absolute left-2 top-2 flex items-center gap-1 rounded-md bg-black/60 px-2 py-0.5">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+            <span className="terminal-text text-[10px] text-white">REC</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FocusGauge({ value, live, label }: { value: number; live: boolean; label: string }) {
   const r = 70;
   const c = 2 * Math.PI * r;
