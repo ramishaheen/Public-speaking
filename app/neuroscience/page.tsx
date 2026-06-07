@@ -32,6 +32,7 @@ export default function NeurosciencePage() {
   const [secondsLeft, setSecondsLeft] = useState(SESSION_SECONDS);
   const [result, setResult] = useState<FocusResult | null>(null);
   const [last, setLast] = useState<FocusResult | null>(null);
+  const [hasSignal, setHasSignal] = useState(false); // a real, non-zero EEG reading arrived
 
   const handleRef = useRef<EEGHandle | null>(null);
   const samplesRef = useRef<number[]>([]);
@@ -49,6 +50,7 @@ export default function NeurosciencePage() {
     setMode(m);
     setPhase("connecting");
     setStatusDetail("");
+    setHasSignal(false);
     samplesRef.current = [];
     handleRef.current?.stop();
     handleRef.current = startEEG(
@@ -56,6 +58,8 @@ export default function NeurosciencePage() {
       (s) => {
         setAttention(s.attention);
         setMeditation(s.meditation);
+        // Only a clean, non-zero attention reading counts as a real signal.
+        if (s.attention > 0 && s.poorSignal < 200) setHasSignal(true);
       },
       (st, detail) => {
         setStatus(st);
@@ -93,8 +97,11 @@ export default function NeurosciencePage() {
     handleRef.current?.stop();
     const r = analyzeFocus(samplesRef.current, SESSION_SECONDS);
     setResult(r);
-    saveFocusResult(r);
-    setLast(r);
+    // Only persist a real session (don't store an empty "no signal" run).
+    if (!r.noData) {
+      saveFocusResult(r);
+      setLast(r);
+    }
     setPhase("results");
   };
 
@@ -115,7 +122,10 @@ export default function NeurosciencePage() {
     );
   }
 
-  const ready = status === "connected" || status === "simulating";
+  // "ready" = we can actually measure focus. Simulation is ready immediately;
+  // a real device is ready only once a clean, non-zero signal arrives.
+  const connected = status === "connected" || status === "simulating";
+  const ready = mode === "sim" ? status === "simulating" : hasSignal;
 
   return (
     <AppShell active="neuroscience">
@@ -139,6 +149,7 @@ export default function NeurosciencePage() {
                 detail={statusDetail}
                 attention={attention}
                 ready={ready}
+                connected={connected}
                 onStart={startSession}
                 onRetry={() => beginConnect(mode)}
                 onSwitchSim={() => beginConnect("sim")}
@@ -150,7 +161,16 @@ export default function NeurosciencePage() {
               <RunningPanel secondsLeft={secondsLeft} mode={mode} onStop={finishSession} />
             )}
 
-            {phase === "results" && result && (
+            {phase === "results" && result && result.noData && (
+              <NoDataPanel
+                mode={mode}
+                onAgain={() => beginConnect(mode)}
+                onSwitchSim={() => beginConnect("sim")}
+                onHome={reset}
+              />
+            )}
+
+            {phase === "results" && result && !result.noData && (
               <ResultsPanel result={result} onAgain={() => beginConnect(mode)} onHome={reset} />
             )}
 
@@ -169,9 +189,15 @@ export default function NeurosciencePage() {
           <TerminalHeader path="C:\ETIHAD\SPEAKING_ROOM\NEURO\LIVE_FOCUS" />
           <div className="glass flex min-h-[320px] flex-col items-center justify-center rounded-b-xl border-t-0 p-5">
             <FocusGauge
-              value={phase === "results" && result ? result.focusScore : attention}
+              value={phase === "results" && result && !result.noData ? result.focusScore : attention}
               live={phase === "running"}
-              label={phase === "results" ? "FOCUS SCORE" : "LIVE FOCUS"}
+              label={
+                phase === "results"
+                  ? result?.noData
+                    ? "NO SIGNAL"
+                    : "FOCUS SCORE"
+                  : "LIVE FOCUS"
+              }
             />
             <div className="mt-4 grid w-full grid-cols-2 gap-2">
               <MiniStat label="Attention" value={attention} />
@@ -243,6 +269,7 @@ function ConnectPanel({
   detail,
   attention,
   ready,
+  connected,
   onStart,
   onRetry,
   onSwitchSim,
@@ -253,20 +280,26 @@ function ConnectPanel({
   detail: string;
   attention: number;
   ready: boolean;
+  connected: boolean;
   onStart: () => void;
   onRetry: () => void;
   onSwitchSim: () => void;
   onBack: () => void;
 }) {
   const isError = status === "error";
+  // Device port opened but no clean brainwave signal yet.
+  const waitingForSignal = mode === "device" && connected && !ready && !isError;
   return (
     <div className="animate-fadeUp">
       <div className="terminal-text text-[11px] uppercase tracking-widest text-neon">
         {mode === "sim" ? "SIMULATION_LINK" : "MINDWAVE_LINK"}
       </div>
       <div className="mt-3 space-y-1.5 text-sm">
-        <LinkLine ok={mode === "sim" || ready} text={mode === "sim" ? "Simulation engine started" : "Reading MindWave serial stream…"} />
-        <LinkLine ok={ready} text={ready ? "Signal locked" : isError ? "No signal" : "Acquiring signal…"} />
+        <LinkLine
+          ok={mode === "sim" ? ready : connected}
+          text={mode === "sim" ? "Simulation engine started" : connected ? "Serial port connected" : "Opening serial port…"}
+        />
+        <LinkLine ok={ready} text={ready ? "Brainwave signal locked" : isError ? "No signal" : "Waiting for a clean signal…"} />
         {ready && <LinkLine ok={attention > 0} text={`Live attention: ${attention}/100`} />}
       </div>
 
@@ -276,17 +309,26 @@ function ConnectPanel({
         </p>
       )}
 
+      {waitingForSignal && (
+        <p className="mt-3 rounded-lg border border-gold/30 bg-gold/5 p-2.5 text-xs text-gold">
+          Port connected, but no brainwave data yet. Put the headset on so the{" "}
+          <span className="font-semibold">forehead sensor touches your skin</span> and the{" "}
+          <span className="font-semibold">ear clip is on your earlobe</span>. The button unlocks once
+          a real signal arrives — we won&apos;t fake a result.
+        </p>
+      )}
+
       <div className="mt-5 flex flex-wrap gap-2">
         <PrimaryButton onClick={onStart} disabled={!ready}>
           {ready ? "Start 60s Focus Session" : "Waiting for signal…"}
         </PrimaryButton>
-        {isError && mode === "device" && (
+        {(isError || waitingForSignal) && mode === "device" && (
           <>
             <SecondaryButton onClick={onRetry}>Retry device</SecondaryButton>
             <SecondaryButton onClick={onSwitchSim}>Use Simulation</SecondaryButton>
           </>
         )}
-        {!isError && <SecondaryButton onClick={onBack}>Back</SecondaryButton>}
+        {!isError && !waitingForSignal && <SecondaryButton onClick={onBack}>Back</SecondaryButton>}
       </div>
     </div>
   );
@@ -326,6 +368,51 @@ function RunningPanel({
       </div>
       <div className="mt-5">
         <SecondaryButton onClick={onStop}>Stop & analyze</SecondaryButton>
+      </div>
+    </div>
+  );
+}
+
+function NoDataPanel({
+  mode,
+  onAgain,
+  onSwitchSim,
+  onHome,
+}: {
+  mode: EEGMode;
+  onAgain: () => void;
+  onSwitchSim: () => void;
+  onHome: () => void;
+}) {
+  return (
+    <div className="animate-fadeUp">
+      <div className="terminal-text text-[11px] uppercase tracking-widest text-gold">
+        NO_SIGNAL_CAPTURED
+      </div>
+      <p className="mt-2 text-sm font-semibold text-white">
+        No usable brainwave data was recorded — so there&apos;s no score to show.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-mist">
+        The session ran but the headset never sent a clean attention reading (it stayed at 0). A
+        focus score from that would be meaningless, so we won&apos;t invent one.
+      </p>
+      <div className="mt-3 rounded-xl border border-gold/25 bg-gold/5 p-3.5 text-sm text-white/90">
+        <div className="terminal-text text-[10px] uppercase tracking-widest text-gold">
+          Checklist
+        </div>
+        <ul className="mt-2 space-y-1.5">
+          <li>› Wear it so the <b>forehead sensor sits on bare skin</b> (above the eyebrow).</li>
+          <li>› Clip the <b>ear contact onto your earlobe</b> — both contacts are required.</li>
+          <li>› Confirm you selected the actual <b>MindWave</b> port, and the headset is powered on.</li>
+          <li>› Sit still for a few seconds so it can lock a signal before starting.</li>
+        </ul>
+      </div>
+      <div className="mt-5 flex flex-wrap gap-2">
+        <PrimaryButton onClick={onAgain}>
+          {mode === "sim" ? "Try again" : "Reconnect headset"}
+        </PrimaryButton>
+        {mode === "device" && <SecondaryButton onClick={onSwitchSim}>Run Simulation</SecondaryButton>}
+        <SecondaryButton onClick={onHome}>Back</SecondaryButton>
       </div>
     </div>
   );
