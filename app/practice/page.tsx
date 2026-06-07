@@ -5,6 +5,7 @@ import { useProfile } from "@/lib/store";
 import { PRACTICE_SCENARIOS, EMOTIONAL_HOOKS } from "@/lib/content";
 import { generatePracticeFeedback, recomputeBadges, generateDailyChallenge } from "@/lib/ai";
 import { fetchLLMStatus, requestFeedback } from "@/lib/llm-client";
+import { analyzeVoice, voiceSummary, VoiceMetrics } from "@/lib/voice-metrics";
 import { PracticeAttempt, PracticeFeedback } from "@/lib/types";
 import { AppShell, SectionTitle } from "@/components/shell";
 import { TerminalHeader, TerminalStatusBar, RotatingText } from "@/components/terminal";
@@ -27,12 +28,15 @@ export default function PracticePage() {
   const [wasSpoken, setWasSpoken] = useState(false);
   const [hasAudio, setHasAudio] = useState(false);
   const [srSupported, setSrSupported] = useState(true);
+  const [voiceMetrics, setVoiceMetrics] = useState<VoiceMetrics | null>(null);
+  const [analyzingVoice, setAnalyzingVoice] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<any>(null);
   const baseTextRef = useRef<string>("");
   const audioBlobRef = useRef<Blob | null>(null);
+  const voiceMetricsRef = useRef<VoiceMetrics | null>(null);
 
   const scenario = PRACTICE_SCENARIOS.find((s) => s.id === scenarioId)!;
 
@@ -56,7 +60,7 @@ export default function PracticePage() {
       mr.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
-      mr.onstop = () => {
+      mr.onstop = async () => {
         const blob = new Blob(chunksRef.current, {
           type: mr.mimeType || (chunksRef.current[0] ? (chunksRef.current[0] as Blob).type : "audio/webm"),
         });
@@ -64,6 +68,14 @@ export default function PracticePage() {
         setHasAudio(blob.size > 0);
         setAudioUrl(URL.createObjectURL(blob));
         stream.getTracks().forEach((t) => t.stop());
+        // Analyze delivery (pace, pauses, energy, pitch) from the recording.
+        if (blob.size > 0) {
+          setAnalyzingVoice(true);
+          const m = await analyzeVoice(blob, baseTextRef.current || response);
+          voiceMetricsRef.current = m;
+          setVoiceMetrics(m);
+          setAnalyzingVoice(false);
+        }
       };
       mediaRecorderRef.current = mr;
       mr.start();
@@ -131,10 +143,9 @@ export default function PracticePage() {
   // -------- submit --------
   const submit = async () => {
     const hasText = !!response.trim();
-    const canUseAudio = engine === "gemini" && !!audioBlobRef.current;
-    if (!hasText && !canUseAudio) {
+    if (!hasText) {
       setRecError(
-        "No answer to evaluate yet. Type your answer, or record again in Chrome/Edge/Safari for live transcription. (With a Gemini key, your voice recording is transcribed automatically.)",
+        "No answer to evaluate yet. Type your answer, or record it (Chrome/Edge/Safari transcribe your voice live as you speak).",
       );
       return;
     }
@@ -148,45 +159,21 @@ export default function PracticePage() {
       age: profile.age,
       selectedGoals: profile.selectedGoals,
       roleModelName: profile.roleModels[0] || profile.otherRoleModel || "",
+      audioTranscript: wasSpoken,
+      voiceMetrics: voiceMetricsRef.current, // pace, pauses, fillers, energy, pitch
     };
 
     let fb: (PracticeFeedback & { transcript?: string }) | null = null;
     let used: "gemini" | "mock" = "mock";
 
     if (engine === "gemini") {
-      // Prefer transcribing the actual audio (works in every browser).
-      if (audioBlobRef.current) {
-        try {
-          const data = await blobToBase64(audioBlobRef.current);
-          fb = await requestFeedback({
-            ...base,
-            response,
-            audio: { data, mimeType: audioBlobRef.current.type || "audio/webm" },
-          });
-        } catch {
-          fb = null;
-        }
-      }
-      // No audio (or audio failed) but we have text → evaluate the text.
-      if (!fb && hasText) {
-        fb = await requestFeedback({ ...base, response, audioTranscript: wasSpoken });
-      }
-      if (fb) {
-        used = "gemini";
-        if (fb.transcript && fb.transcript.trim()) setResponse(fb.transcript.trim());
-      }
+      // Evaluate the transcript + measured delivery metrics (reliable, any browser).
+      fb = await requestFeedback({ ...base, response });
+      if (fb) used = "gemini";
     }
 
     if (!fb) {
-      // local mock fallback (text only — keep UX snappy)
-      if (!hasText) {
-        setAnalyzing(false);
-        setRecError(
-          "Voice evaluation needs a Gemini key. For now, type your answer (or use Chrome/Edge/Safari, which transcribes your voice live as you speak).",
-        );
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 500));
       fb = generatePracticeFeedback(response, scenarioId, profile);
       used = "mock";
     }
@@ -217,7 +204,9 @@ export default function PracticePage() {
     setHasAudio(false);
     setUsedEngine(null);
     setRecError("");
+    setVoiceMetrics(null);
     audioBlobRef.current = null;
+    voiceMetricsRef.current = null;
   };
 
   if (!hydrated) {
@@ -317,20 +306,25 @@ export default function PracticePage() {
               )}
             </div>
             {recError && <p className="terminal-text mt-2 text-xs text-gold">! {recError}</p>}
-            {hasAudio && !recording && (
-              <p className="terminal-text mt-2 text-[11px] text-neon">
-                ✓ recording captured —{" "}
-                {engine === "gemini"
-                  ? "Gemini will transcribe & evaluate it when you submit."
-                  : "submit to evaluate (the live transcript is in the box above)."}
-              </p>
+            {analyzingVoice && (
+              <p className="terminal-text mt-2 text-[11px] text-teal">analyzing your delivery…</p>
+            )}
+            {voiceMetrics && !recording && (
+              <div className="mt-2 rounded-lg border border-teal/25 bg-teal/5 p-2.5">
+                <div className="terminal-text text-[10px] uppercase tracking-widest text-teal">
+                  Voice & delivery (measured)
+                </div>
+                <ul className="mt-1 space-y-0.5 text-[11px] text-white/90">
+                  {voiceSummary(voiceMetrics).map((s, i) => (
+                    <li key={i}>· {s}</li>
+                  ))}
+                </ul>
+              </div>
             )}
             <p className="mt-1.5 text-[11px] text-mist">
-              {engine === "gemini"
-                ? "Speak your answer and submit — Gemini transcribes the recording and evaluates it, in any browser."
-                : srSupported
-                  ? "Your voice is transcribed live into the box as you speak (Chrome, Edge, Safari). Edit it, then submit."
-                  : "This browser can't transcribe speech locally. Recording still works — type your answer, or use Chrome/Edge/Safari. (Adding a Gemini key enables voice in every browser.)"}
+              Record your answer — it&apos;s transcribed live, and your{" "}
+              <span className="text-teal">delivery</span> (pace, pauses, fillers, vocal variety) is
+              measured from the audio and factored into the score. Voice stays on your device.
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
