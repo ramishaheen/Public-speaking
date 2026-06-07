@@ -26,7 +26,7 @@ type Phase = "intro" | "connecting" | "running" | "results";
 export default function NeurosciencePage() {
   const { profile, hydrated } = useProfile();
   const [phase, setPhase] = useState<Phase>("intro");
-  const [mode, setMode] = useState<EEGMode>("sim");
+  const [mode, setMode] = useState<EEGMode>("device");
   const [status, setStatus] = useState<EEGStatus>("idle");
   const [statusDetail, setStatusDetail] = useState("");
   const [attention, setAttention] = useState(0);
@@ -289,12 +289,11 @@ function IntroPanel({
       <p className="mt-2 text-sm leading-relaxed text-mist">
         This lab uses an EEG headset (NeuroSky <span className="text-neon">MindWave</span>) to read
         your live attention while you speak. You&apos;ll run a {SESSION_SECONDS}-second focus
-        session, then get a focus score, stability, and speaking-specific coaching. No headset?
-        Run it in <span className="text-teal">Simulation</span> to see exactly how it works.
+        session, then get a focus score, stability, and speaking-specific coaching.
       </p>
 
       <div className="mt-4 grid gap-2 sm:grid-cols-3">
-        <Step n={1} t="Connect" d="Pair your MindWave or pick Simulation." />
+        <Step n={1} t="Connect" d="Power on and pair your MindWave headset." />
         <Step n={2} t="Speak on camera" d="Present for 60s while it reads focus." />
         <Step n={3} t="Get insights" d="Focus score + how to steady it." />
       </div>
@@ -305,13 +304,11 @@ function IntroPanel({
 
       <div className="mt-5 flex flex-wrap gap-2">
         <PrimaryButton onClick={() => onConnect("device")}>Connect MindWave</PrimaryButton>
-        <SecondaryButton onClick={() => onConnect("sim")}>Run Simulation</SecondaryButton>
       </div>
       <p className="mt-3 text-[11px] leading-relaxed text-mist">
-        Real device: use <span className="text-neon">Chrome or Edge on desktop</span>. Plug in the
-        MindWave USB dongle (or pair a MindWave Mobile so it shows as a serial/COM port), click{" "}
-        <span className="text-neon">Connect MindWave</span>, and pick the port. No headset? Use{" "}
-        <span className="text-teal">Simulation</span>.
+        Use <span className="text-neon">Chrome or Edge on desktop</span>. Power on the MindWave so it
+        pairs as a serial/COM port, click <span className="text-neon">Connect MindWave</span>, and
+        select your headset&apos;s port (on Windows this is the MindWave&apos;s outgoing COM port).
       </p>
 
       {last && (
@@ -383,11 +380,8 @@ function ConnectPanel({
         <PrimaryButton onClick={onStart} disabled={!ready}>
           {ready ? "Start 60s Focus Session" : "Waiting for signal…"}
         </PrimaryButton>
-        {(isError || waitingForSignal) && mode === "device" && (
-          <>
-            <SecondaryButton onClick={onRetry}>Retry device</SecondaryButton>
-            <SecondaryButton onClick={onSwitchSim}>Use Simulation</SecondaryButton>
-          </>
+        {(isError || waitingForSignal) && (
+          <SecondaryButton onClick={onRetry}>Retry device</SecondaryButton>
         )}
         {!isError && !waitingForSignal && <SecondaryButton onClick={onBack}>Back</SecondaryButton>}
       </div>
@@ -469,10 +463,7 @@ function NoDataPanel({
         </ul>
       </div>
       <div className="mt-5 flex flex-wrap gap-2">
-        <PrimaryButton onClick={onAgain}>
-          {mode === "sim" ? "Try again" : "Reconnect headset"}
-        </PrimaryButton>
-        {mode === "device" && <SecondaryButton onClick={onSwitchSim}>Run Simulation</SecondaryButton>}
+        <PrimaryButton onClick={onAgain}>Reconnect headset</PrimaryButton>
         <SecondaryButton onClick={onHome}>Back</SecondaryButton>
       </div>
     </div>
