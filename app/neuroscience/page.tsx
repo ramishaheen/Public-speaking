@@ -18,10 +18,27 @@ import {
   BandPowers,
   BAND_MEANING,
 } from "@/lib/eeg";
+import {
+  eegStability,
+  buildTimeline,
+  computeBaseline,
+  saveBaseline,
+  loadBaseline,
+  EEGBaseline,
+  EEGStability,
+  TimelineSegment,
+} from "@/lib/eeg-analysis";
 
 const SESSION_SECONDS = 60;
+const BASELINE_SECONDS = 60;
+const SEGMENT_LABELS = ["Opening", "Build-up", "Core", "Closing"];
 
-type Phase = "intro" | "connecting" | "running" | "results";
+type Phase = "intro" | "connecting" | "running" | "results" | "calibrating";
+
+interface EEGAnalysis {
+  stability: EEGStability;
+  timeline: TimelineSegment[];
+}
 
 export default function NeurosciencePage() {
   const { profile, hydrated } = useProfile();
@@ -37,9 +54,17 @@ export default function NeurosciencePage() {
   const [hasSignal, setHasSignal] = useState(false); // a real, non-zero EEG reading arrived
   const [bands, setBands] = useState<BandPowers | null>(null);
   const [poorSignal, setPoorSignal] = useState(200); // 0 = perfect contact, 200 = none
+  const [baseline, setBaseline] = useState<EEGBaseline | null>(null);
+  const [analysis, setAnalysis] = useState<EEGAnalysis | null>(null);
+  const [calibLeft, setCalibLeft] = useState(BASELINE_SECONDS);
+  const [validCount, setValidCount] = useState(0);
 
   const handleRef = useRef<EEGHandle | null>(null);
   const samplesRef = useRef<number[]>([]);
+  const medSamplesRef = useRef<number[]>([]);
+  const poorRef = useRef(200);
+  const validRef = useRef(0);
+  const totalRef = useRef(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Webcam preview (see yourself present while focus is measured).
@@ -79,12 +104,22 @@ export default function NeurosciencePage() {
 
   useEffect(() => {
     setLast(loadFocusResult());
+    setBaseline(loadBaseline());
     return () => {
       handleRef.current?.stop();
       if (tickRef.current) clearInterval(tickRef.current);
       camStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);
+
+  // keep latest meditation + poor signal for the sampling interval
+  const medRef = useRef(0);
+  useEffect(() => {
+    medRef.current = meditation;
+  }, [meditation]);
+  useEffect(() => {
+    poorRef.current = poorSignal;
+  }, [poorSignal]);
 
   const beginConnect = (m: EEGMode) => {
     setMode(m);
@@ -115,12 +150,17 @@ export default function NeurosciencePage() {
 
   const startSession = () => {
     samplesRef.current = [];
+    medSamplesRef.current = [];
+    validRef.current = 0;
+    totalRef.current = 0;
     setSecondsLeft(SESSION_SECONDS);
     setPhase("running");
     if (tickRef.current) clearInterval(tickRef.current);
     tickRef.current = setInterval(() => {
-      // record current attention each second
       samplesRef.current.push(attentionRef.current);
+      medSamplesRef.current.push(medRef.current);
+      totalRef.current += 1;
+      if (attentionRef.current > 0 && poorRef.current < 50) validRef.current += 1;
       setSecondsLeft((s) => {
         if (s <= 1) {
           finishSession();
@@ -129,6 +169,38 @@ export default function NeurosciencePage() {
         return s - 1;
       });
     }, 1000);
+  };
+
+  // ---- baseline calibration (resting) ----
+  const startCalibration = () => {
+    samplesRef.current = [];
+    medSamplesRef.current = [];
+    setCalibLeft(BASELINE_SECONDS);
+    setPhase("calibrating");
+    if (tickRef.current) clearInterval(tickRef.current);
+    tickRef.current = setInterval(() => {
+      samplesRef.current.push(attentionRef.current);
+      medSamplesRef.current.push(medRef.current);
+      setCalibLeft((s) => {
+        if (s <= 1) {
+          finishCalibration();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+  };
+
+  const finishCalibration = () => {
+    if (tickRef.current) clearInterval(tickRef.current);
+    const b = computeBaseline(samplesRef.current, medSamplesRef.current);
+    if (b.n >= 10) {
+      saveBaseline(b);
+      setBaseline(b);
+    }
+    samplesRef.current = [];
+    medSamplesRef.current = [];
+    setPhase("connecting"); // back to ready state, headset still streaming
   };
 
   // keep a ref of latest attention for the interval closure
@@ -147,6 +219,18 @@ export default function NeurosciencePage() {
     if (!r.noData) {
       saveFocusResult(r);
       setLast(r);
+      // Deeper analysis: stability (vs baseline) + segmented timeline.
+      const validRatio = totalRef.current ? validRef.current / totalRef.current : 0;
+      const stability = eegStability(
+        samplesRef.current,
+        medSamplesRef.current,
+        validRatio,
+        baseline,
+      );
+      const timeline = buildTimeline(samplesRef.current.filter((s) => s > 0), SEGMENT_LABELS);
+      setAnalysis({ stability, timeline });
+    } else {
+      setAnalysis(null);
     }
     setPhase("results");
   };
@@ -159,6 +243,7 @@ export default function NeurosciencePage() {
     setStatus("idle");
     setAttention(0);
     setResult(null);
+    setAnalysis(null);
   };
 
   if (!hydrated) {
@@ -197,18 +282,24 @@ export default function NeurosciencePage() {
                 attention={attention}
                 ready={ready}
                 connected={connected}
+                baseline={baseline}
                 onStart={startSession}
+                onCalibrate={startCalibration}
                 onRetry={() => beginConnect(mode)}
                 onSwitchSim={() => beginConnect("sim")}
                 onBack={reset}
               />
             )}
 
+            {phase === "calibrating" && (
+              <CalibratePanel secondsLeft={calibLeft} onStop={finishCalibration} />
+            )}
+
             {phase === "running" && (
               <RunningPanel secondsLeft={secondsLeft} mode={mode} onStop={finishSession} />
             )}
 
-            {(phase === "connecting" || phase === "running") && (
+            {(phase === "connecting" || phase === "running" || phase === "calibrating") && (
               <BrainwavesPanel bands={bands} />
             )}
 
@@ -225,6 +316,10 @@ export default function NeurosciencePage() {
               <ResultsPanel result={result} onAgain={() => beginConnect(mode)} onHome={reset} />
             )}
 
+            {phase === "results" && result && !result.noData && analysis && (
+              <EEGAnalysisPanel analysis={analysis} baseline={baseline} />
+            )}
+
             <TerminalStatusBar
               items={[
                 `MODE: [${mode === "sim" ? "SIMULATION" : "MINDWAVE"}]`,
@@ -239,27 +334,30 @@ export default function NeurosciencePage() {
         <div className="overflow-hidden rounded-xl shadow-glass">
           <TerminalHeader path="C:\ETIHAD\SPEAKING_ROOM\NEURO\LIVE_FOCUS" />
           <div className="glass flex min-h-[320px] flex-col items-center justify-center rounded-b-xl border-t-0 p-5">
-            {(phase === "connecting" || phase === "running") && (
+            {(phase === "connecting" || phase === "running" || phase === "calibrating") && (
               <CameraView videoRef={videoRef} on={camOn} error={camError} live={phase === "running"} />
             )}
             <FocusGauge
               value={phase === "results" && result && !result.noData ? result.focusScore : attention}
-              live={phase === "running"}
+              live={phase === "running" || phase === "calibrating"}
               label={
                 phase === "results"
                   ? result?.noData
                     ? "NO SIGNAL"
                     : "FOCUS SCORE"
-                  : "LIVE FOCUS"
+                  : phase === "calibrating"
+                    ? "CALIBRATING"
+                    : "LIVE FOCUS"
               }
             />
             <div className="mt-4 grid w-full grid-cols-2 gap-2">
               <MiniStat label="Attention" value={attention} />
               <MiniStat label="Calm" value={meditation} />
             </div>
-            {mode === "device" && (phase === "connecting" || phase === "running") && (
-              <SignalQuality poor={poorSignal} />
-            )}
+            {mode === "device" &&
+              (phase === "connecting" || phase === "running" || phase === "calibrating") && (
+                <SignalQuality poor={poorSignal} />
+              )}
             {phase === "running" && (
               <p className="mt-4 text-center text-xs text-mist">
                 Keep speaking your rehearsed opening aloud. Stay present — let your focus drive the meter.
@@ -328,7 +426,9 @@ function ConnectPanel({
   attention,
   ready,
   connected,
+  baseline,
   onStart,
+  onCalibrate,
   onRetry,
   onSwitchSim,
   onBack,
@@ -339,7 +439,9 @@ function ConnectPanel({
   attention: number;
   ready: boolean;
   connected: boolean;
+  baseline: EEGBaseline | null;
   onStart: () => void;
+  onCalibrate: () => void;
   onRetry: () => void;
   onSwitchSim: () => void;
   onBack: () => void;
@@ -376,14 +478,63 @@ function ConnectPanel({
         </p>
       )}
 
-      <div className="mt-5 flex flex-wrap gap-2">
+      {ready && (
+        <div className="mt-3 rounded-lg border border-teal/25 bg-teal/5 p-2.5 text-[11px] text-mist">
+          {baseline ? (
+            <>
+              <span className="terminal-text text-teal">BASELINE_SET:</span> resting attention{" "}
+              {baseline.meanAttention} (±{baseline.sdAttention}). Your session is scored against your
+              own baseline.
+            </>
+          ) : (
+            <>
+              <span className="terminal-text text-gold">RECOMMENDED:</span> calibrate a 60s resting
+              baseline first — it makes scoring personal (you vs you), not a universal norm.
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap gap-2">
         <PrimaryButton onClick={onStart} disabled={!ready}>
           {ready ? "Start 60s Focus Session" : "Waiting for signal…"}
         </PrimaryButton>
+        {ready && (
+          <SecondaryButton onClick={onCalibrate}>
+            {baseline ? "Re-calibrate baseline" : "Calibrate baseline (60s rest)"}
+          </SecondaryButton>
+        )}
         {(isError || waitingForSignal) && (
           <SecondaryButton onClick={onRetry}>Retry device</SecondaryButton>
         )}
-        {!isError && !waitingForSignal && <SecondaryButton onClick={onBack}>Back</SecondaryButton>}
+        {!isError && !waitingForSignal && !ready && (
+          <SecondaryButton onClick={onBack}>Back</SecondaryButton>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CalibratePanel({ secondsLeft, onStop }: { secondsLeft: number; onStop: () => void }) {
+  const pct = Math.round(((BASELINE_SECONDS - secondsLeft) / BASELINE_SECONDS) * 100);
+  return (
+    <div className="animate-fadeUp">
+      <div className="terminal-text text-[11px] uppercase tracking-widest text-teal">
+        CALIBRATING_RESTING_BASELINE
+      </div>
+      <div className="mt-3 flex items-baseline gap-2">
+        <span className="text-4xl font-extrabold text-glow text-white">{secondsLeft}</span>
+        <span className="text-sm text-mist">seconds — sit still & relax</span>
+      </div>
+      <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full border border-steel bg-black/40">
+        <div className="h-full bg-teal/70 transition-all duration-1000" style={{ width: `${pct}%` }} />
+      </div>
+      <p className="mt-4 rounded-xl border border-teal/20 bg-teal/5 p-3 text-sm text-white/90">
+        Relax with your eyes open, breathing normally — don&apos;t talk. We&apos;re recording your
+        calm resting state so we can measure how your focus changes when you speak.
+      </p>
+      <div className="mt-5">
+        <SecondaryButton onClick={onStop}>Finish early</SecondaryButton>
       </div>
     </div>
   );
@@ -519,6 +670,90 @@ function ResultsPanel({
 }
 
 // ---------------- Small UI bits ----------------
+function EEGAnalysisPanel({
+  analysis,
+  baseline,
+}: {
+  analysis: EEGAnalysis;
+  baseline: EEGBaseline | null;
+}) {
+  const s = analysis.stability;
+  const confColor =
+    s.confidence === "high" ? "text-neon" : s.confidence === "medium" ? "text-gold" : "text-mist";
+  return (
+    <div className="mt-4 animate-fadeUp">
+      <div className="flex items-center justify-between">
+        <div className="terminal-text text-[11px] uppercase tracking-widest text-neon">
+          EEG COGNITIVE-STATE ANALYSIS
+        </div>
+        <span className={`terminal-text text-[10px] ${confColor}`}>confidence: {s.confidence}</span>
+      </div>
+
+      <div className="mt-2 flex items-end gap-2">
+        <span className="text-3xl font-extrabold text-white">{s.score}</span>
+        <span className="mb-1 text-xs text-mist">/ 100 cognitive stability</span>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        <MiniBar label="Focus consistency" value={s.focusConsistency} />
+        <MiniBar label="Relaxation stability" value={s.relaxationStability} />
+        <MiniBar label="Recovery after dips" value={s.recoveryAbility} />
+        <MiniBar label="Baseline alignment" value={s.baselineAlignment} />
+        <MiniBar label="Signal reliability" value={s.signalReliability} />
+      </div>
+
+      <div className="mt-4">
+        <div className="terminal-text text-[10px] uppercase tracking-widest text-teal">
+          Focus timeline
+        </div>
+        <div className="mt-2 space-y-2">
+          {analysis.timeline.map((seg, i) => (
+            <div key={i} className="rounded-lg border border-steel bg-black/30 p-2.5">
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-semibold text-white">{seg.label}</span>
+                <span className="terminal-text text-xs text-mist">
+                  {seg.avgAttention}/100 ·{" "}
+                  {seg.trend === "rising" ? "▲" : seg.trend === "falling" ? "▼" : "▬"} {seg.trend}
+                </span>
+              </div>
+              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-black/50">
+                <div
+                  className="h-full rounded-full bg-neon/60"
+                  style={{ width: `${seg.avgAttention}%` }}
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-mist">{seg.note}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <p className="mt-3 text-[10px] leading-snug text-mist">
+        {baseline
+          ? `Scored against your resting baseline (attention ${baseline.meanAttention}).`
+          : "No personal baseline yet — calibrate a resting baseline for more accurate, personalized scoring."}{" "}
+        These figures are cognitive-state proxies from a single-channel EEG; they <b>may indicate</b>{" "}
+        focus and composure trends but do not measure confidence, emotion, or truth.
+      </p>
+    </div>
+  );
+}
+
+function MiniBar({ label, value }: { label: string; value: number }) {
+  const c = value >= 70 ? "#39FF14" : value >= 45 ? "#1FB6A8" : "#E6B800";
+  return (
+    <div>
+      <div className="flex justify-between text-[11px] text-mist">
+        <span>{label}</span>
+        <span>{value}</span>
+      </div>
+      <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-black/50">
+        <div className="h-full rounded-full" style={{ width: `${value}%`, backgroundColor: c }} />
+      </div>
+    </div>
+  );
+}
+
 function SignalQuality({ poor }: { poor: number }) {
   // poor: 0 = perfect contact, 200 = no contact.
   const quality = Math.max(0, Math.min(100, Math.round(100 - (poor / 200) * 100)));
