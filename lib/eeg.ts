@@ -64,6 +64,9 @@ export function isWebSerialSupported(): boolean {
   return typeof navigator !== "undefined" && "serial" in navigator;
 }
 
+// Remembered MindWave serial port, so reconnects skip the picker dialog.
+let preferredPort: any = null;
+
 export function startEEG(
   mode: EEGMode,
   onSample: (s: EEGSample) => void,
@@ -97,15 +100,38 @@ function startSerial(
   let reader: any = null;
 
   (async () => {
+    const serial = (navigator as any).serial;
     try {
-      // Must run inside the click gesture that called startEEG.
-      port = await (navigator as any).serial.requestPort();
-      await port.open({ baudRate: baud });
+      // Auto-pick: reuse the MindWave the user granted before (this session or
+      // a previous one) so they don't have to choose from the dialog each time.
+      let chosen: any = preferredPort;
+      if (!chosen) {
+        try {
+          const granted = await serial.getPorts();
+          if (granted && granted.length === 1) chosen = granted[0];
+        } catch {}
+      }
+      // Otherwise show the picker (must run inside the click gesture).
+      if (!chosen) chosen = await serial.requestPort();
+      port = chosen;
+      try {
+        await port.open({ baudRate: baud });
+      } catch {
+        // A remembered port can go stale; fall back to a fresh pick once.
+        if (chosen === preferredPort) {
+          preferredPort = null;
+          port = await serial.requestPort();
+          await port.open({ baudRate: baud });
+        } else {
+          throw new Error("open failed");
+        }
+      }
+      preferredPort = port; // remember for next time
     } catch (e: any) {
       if (!cancelled)
         onStatus(
           "error",
-          "No device selected, or the port couldn't open. Pick your MindWave port (or run Simulation).",
+          "No device selected, or the port couldn't open. Pick \"MindWave Mobile\" in the dialog (or run Simulation).",
         );
       return;
     }
