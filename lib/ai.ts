@@ -322,6 +322,102 @@ function analyzeSpeech(text: string): SpeechAnalysis {
 
 const clampScore = (n: number) => Math.max(20, Math.min(98, Math.round(n)));
 
+// ============================================================
+// Skills status + blind-spot report (mock fallback for no LLM key).
+// ============================================================
+export function generateSkillsStatus(p: UserProfile): any {
+  const attempts = p.attempts || [];
+  const avg = (key: keyof PracticeFeedback) =>
+    attempts.length
+      ? Math.round(
+          attempts.reduce((s, a) => s + (Number(a.feedback[key]) || 0), 0) / attempts.length,
+        )
+      : null;
+
+  const measured = {
+    Clarity: avg("clarity") ?? p.scores.clarity,
+    Confidence: avg("confidence") ?? p.scores.confidence,
+    Structure: avg("structure") ?? Math.round((p.scores.clarity + p.scores.assertiveness) / 2),
+    Engagement: avg("empathy") ?? p.scores.networking,
+    Storytelling: avg("storytelling") ?? p.scores.storytelling,
+    Persuasion: avg("persuasion") ?? p.scores.assertiveness,
+  } as Record<string, number>;
+
+  const level = (s: number) => (s >= 78 ? "strong" : s >= 60 ? "proficient" : "developing");
+  const skills = Object.entries(measured).map(([name, score]) => ({
+    name,
+    score,
+    level: level(score),
+    evidence: attempts.length
+      ? `Averaged across ${attempts.length} practice attempt(s).`
+      : "Based on your self-assessment (no practice attempts yet).",
+    advice:
+      score >= 78
+        ? "Maintain it and use it to lift your weaker areas."
+        : score >= 60
+          ? "Targeted reps will push this into the strong range."
+          : "Make this a primary focus in the Practice Room.",
+  }));
+
+  const sorted = [...skills].sort((a, b) => b.score - a.score);
+  const strengths = sorted.slice(0, 2).map((s) => `${s.name} (${s.score}/100) — your strongest area.`);
+  const weakest = sorted[sorted.length - 1];
+
+  // Blind-spot heuristic: self-perception vs measured.
+  const blindSpots: { title: string; gap: string; why: string; fix: string }[] = [];
+  const selfConfident = p.presentationFeeling === "Confident" || p.scores.confidence >= 70;
+  if (selfConfident && measured.Confidence < 60) {
+    blindSpots.push({
+      title: "Confidence gap",
+      gap: `You see yourself as fairly confident, but your measured confidence in practice is ${measured.Confidence}/100.`,
+      why: "Perceived confidence that doesn't show in delivery can read as nerves to an audience.",
+      fix: "Record short answers and replace hedging ('I think/maybe') with definite statements.",
+    });
+  }
+  if ((p.presentationFeeling === "Very nervous" || p.presentationFeeling === "I avoid presentations") && measured.Clarity >= 65) {
+    blindSpots.push({
+      title: "Underrated ability",
+      gap: `You avoid presentations, yet your clarity scores well (${measured.Clarity}/100).`,
+      why: "Avoidance, not ability, may be your real limiter — that's a fixable mindset gap.",
+      fix: "Do one low-stakes 60-second talk daily to convert ability into comfort.",
+    });
+  }
+  if (measured.Persuasion < 55 && !(p.selectedGoals || []).some((g) => /persua|influence|sell|pitch/i.test(g))) {
+    blindSpots.push({
+      title: "Persuasion is off your radar",
+      gap: `Persuasion isn't in your stated goals, but it's your lower-scoring area (${measured.Persuasion}/100).`,
+      why: "Most speaking outcomes hinge on moving people to act.",
+      fix: "Add a clear benefit + call-to-action to every practice answer.",
+    });
+  }
+  if (blindSpots.length === 0) {
+    blindSpots.push({
+      title: "Not enough data yet",
+      gap: "You haven't completed enough practice attempts to reveal blind spots reliably.",
+      why: "Blind spots show up by comparing how you rate yourself against measured performance.",
+      fix: "Complete 3-5 Practice Room scenarios, then regenerate this report.",
+    });
+  }
+
+  return {
+    headline:
+      attempts.length === 0
+        ? "Early read from your assessment — do a few practice sessions for a sharper picture."
+        : `Across ${attempts.length} session(s), your strongest area is ${sorted[0].name} and your biggest opportunity is ${weakest.name}.`,
+    overall: p.scores.overall,
+    confidence: attempts.length >= 5 ? "medium" : "low",
+    strengths,
+    skills,
+    blindSpots,
+    priorityFocus: `${weakest.name} (${weakest.score}/100) — it's your lowest measured skill, so gains here lift your overall fastest.`,
+    nextSteps: [
+      `Run 3 Practice Room scenarios focused on ${weakest.name.toLowerCase()}.`,
+      "Do a NeuroScience focus session to baseline your composure under pressure.",
+      "Re-generate this report weekly to track movement and new blind spots.",
+    ],
+  };
+}
+
 export function generatePracticeFeedback(
   response: string,
   scenarioId: string,

@@ -84,17 +84,22 @@ async function callGemini(opts: {
       generationConfig: {
         temperature: opts.temperature ?? 0.7,
         responseMimeType: "application/json",
-        maxOutputTokens: 4096,
+        maxOutputTokens: 8192,
+        // Disable "thinking" so the token budget goes to the JSON answer — this
+        // prevents truncated/invalid JSON that silently falls back to the mock.
+        thinkingConfig: { thinkingBudget: 0 },
       },
     }),
   });
   if (!res.ok) {
     const detail = await res.text();
+    console.error("[llm] Gemini error", res.status, detail.slice(0, 300));
     throw new Error(`Gemini ${res.status}: ${detail.slice(0, 300)}`);
   }
   const data = await res.json();
   const text =
     data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") ?? "";
+  if (!text) console.error("[llm] empty Gemini response", JSON.stringify(data).slice(0, 300));
   return text;
 }
 
@@ -127,6 +132,10 @@ export async function POST(req: NextRequest) {
     }
     if (task === "feedback") {
       const data = await buildFeedback(payload);
+      return NextResponse.json({ configured: true, data });
+    }
+    if (task === "status") {
+      const data = await buildStatus(payload);
       return NextResponse.json({ configured: true, data });
     }
     return NextResponse.json({ configured: true, error: "unknown task" }, { status: 400 });
@@ -302,5 +311,78 @@ Return ONLY valid JSON with this exact shape (fill every field with specific, co
     improve: String(o.improve || ""),
     betterVersion: String(o.betterVersion || ""),
     microChallenge: String(o.microChallenge || ""),
+  };
+}
+
+// ---------------- SKILLS STATUS + BLIND SPOTS ----------------
+async function buildStatus(p: any) {
+  const user = `Produce an honest, evidence-based public-speaking SKILLS STATUS and BLIND-SPOT analysis for this learner, synthesizing ALL the data below. Be specific and reference the data; do not be generic or flattering.
+
+SELF-PERCEPTION (from onboarding):
+- Stated goals: ${JSON.stringify(p?.selectedGoals || [])}
+- Self-assessment Likert answers (1-5): ${JSON.stringify(p?.assessmentAnswers || {})}
+- Feeling about presentations: ${p?.presentationFeeling || "?"}
+- Reaction to criticism: ${p?.criticismReaction || "?"}
+- Main barrier: ${p?.selfGrowthBarrier || "?"}
+- Self-reflects regularly: ${p?.selfReflects || "?"}; Finishes what they start: ${p?.finishesWhatStarts || "?"}
+- Computed self-profile: ${p?.profileTitle || "?"}; baseline scores: ${JSON.stringify(p?.scores || {})}
+
+MEASURED PERFORMANCE (from practice + EEG):
+- Practice attempts (${(p?.attempts || []).length}): ${JSON.stringify((p?.attempts || []).slice(0, 12))}
+- Average practice subscores: ${JSON.stringify(p?.avgScores || {})}
+- EEG focus session (MindWave, if any): ${JSON.stringify(p?.focus || null)}
+- Role model / target style: ${p?.roleModel || "their own voice"}
+
+A BLIND SPOT = a gap between what the learner BELIEVES about their speaking and what the DATA shows — e.g. they rate confidence high but practice confidence scores are low, or they avoid presentations yet score well, or a weakness that never shows up in their stated goals. Identify real, specific gaps from the data above. If practice data is thin, say so and lower confidence.
+
+Use careful, probabilistic language ("data suggests", "may indicate"). Never claim certainty about personality or emotion.
+
+Return ONLY valid JSON:
+{
+  "headline": "1-2 sentence honest overall standing",
+  "overall": 0,
+  "confidence": "low | medium | high (based on how much data exists)",
+  "strengths": ["2-4 specific, evidence-backed strengths"],
+  "skills": [
+    {"name": "Clarity", "score": 0, "level": "developing|proficient|strong", "evidence": "cite the data", "advice": "one concrete action"},
+    {"name": "Confidence", "score": 0, "level": "", "evidence": "", "advice": ""},
+    {"name": "Structure", "score": 0, "level": "", "evidence": "", "advice": ""},
+    {"name": "Engagement", "score": 0, "level": "", "evidence": "", "advice": ""},
+    {"name": "Storytelling", "score": 0, "level": "", "evidence": "", "advice": ""},
+    {"name": "Persuasion", "score": 0, "level": "", "evidence": "", "advice": ""}
+  ],
+  "blindSpots": [
+    {"title": "short name", "gap": "what they believe vs what data shows, citing specifics", "why": "why it matters for speaking", "fix": "how to address it"}
+  ],
+  "priorityFocus": "the single most important thing to work on next, and why",
+  "nextSteps": ["3 concrete next steps"]
+}`;
+
+  const text = await callGemini({ system: TRAINER_PERSONA, user, temperature: 0.6 });
+  const o = parseJSON(text);
+  const num = (v: any, d = 60) => {
+    const n = Math.round(Number(v));
+    return isNaN(n) ? d : Math.max(0, Math.min(100, n));
+  };
+  return {
+    headline: String(o.headline || ""),
+    overall: num(o.overall),
+    confidence: String(o.confidence || "low"),
+    strengths: (o.strengths || []).slice(0, 4).map(String),
+    skills: (o.skills || []).slice(0, 8).map((s: any) => ({
+      name: String(s.name || ""),
+      score: num(s.score),
+      level: String(s.level || ""),
+      evidence: String(s.evidence || ""),
+      advice: String(s.advice || ""),
+    })),
+    blindSpots: (o.blindSpots || []).slice(0, 5).map((b: any) => ({
+      title: String(b.title || ""),
+      gap: String(b.gap || ""),
+      why: String(b.why || ""),
+      fix: String(b.fix || ""),
+    })),
+    priorityFocus: String(o.priorityFocus || ""),
+    nextSteps: (o.nextSteps || []).slice(0, 5).map(String),
   };
 }

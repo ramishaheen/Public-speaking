@@ -61,3 +61,33 @@ export async function requestFeedback(payload: unknown): Promise<FeedbackWithTra
   if (!data || typeof data.overall !== "number") return null;
   return data as FeedbackWithTranscript;
 }
+
+export interface SkillStatusItem {
+  name: string;
+  score: number;
+  level: string;
+  evidence: string;
+  advice: string;
+}
+export interface BlindSpot {
+  title: string;
+  gap: string;
+  why: string;
+  fix: string;
+}
+export interface SkillsStatus {
+  headline: string;
+  overall: number;
+  confidence: string;
+  strengths: string[];
+  skills: SkillStatusItem[];
+  blindSpots: BlindSpot[];
+  priorityFocus: string;
+  nextSteps: string[];
+}
+
+export async function requestSkillsStatus(payload: unknown): Promise<SkillsStatus | null> {
+  const data = await post("status", payload);
+  if (!data || !Array.isArray(data.skills)) return null;
+  return data as SkillsStatus;
+}
