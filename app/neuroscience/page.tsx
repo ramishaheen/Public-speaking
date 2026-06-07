@@ -220,9 +220,11 @@ function IntroPanel({
         <PrimaryButton onClick={() => onConnect("device")}>Connect MindWave</PrimaryButton>
         <SecondaryButton onClick={() => onConnect("sim")}>Run Simulation</SecondaryButton>
       </div>
-      <p className="mt-3 text-[11px] text-mist">
-        Real device needs the NeuroSky <span className="text-mist">ThinkGear Connector</span>{" "}
-        running locally (or set <code className="text-neon">NEXT_PUBLIC_THINKGEAR_WS</code>).
+      <p className="mt-3 text-[11px] leading-relaxed text-mist">
+        Real device: use <span className="text-neon">Chrome or Edge on desktop</span>. Plug in the
+        MindWave USB dongle (or pair a MindWave Mobile so it shows as a serial/COM port), click{" "}
+        <span className="text-neon">Connect MindWave</span>, and pick the port. No headset? Use{" "}
+        <span className="text-teal">Simulation</span>.
       </p>
 
       {last && (
@@ -263,7 +265,7 @@ function ConnectPanel({
         {mode === "sim" ? "SIMULATION_LINK" : "MINDWAVE_LINK"}
       </div>
       <div className="mt-3 space-y-1.5 text-sm">
-        <LinkLine ok={mode === "sim" || ready} text={mode === "sim" ? "Simulation engine started" : "Opening ThinkGear Connector…"} />
+        <LinkLine ok={mode === "sim" || ready} text={mode === "sim" ? "Simulation engine started" : "Reading MindWave serial stream…"} />
         <LinkLine ok={ready} text={ready ? "Signal locked" : isError ? "No signal" : "Acquiring signal…"} />
         {ready && <LinkLine ok={attention > 0} text={`Live attention: ${attention}/100`} />}
       </div>
