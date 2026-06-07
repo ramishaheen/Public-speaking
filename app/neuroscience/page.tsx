@@ -15,6 +15,8 @@ import {
   EEGStatus,
   EEGMode,
   FocusResult,
+  BandPowers,
+  BAND_MEANING,
 } from "@/lib/eeg";
 
 const SESSION_SECONDS = 60;
@@ -33,6 +35,7 @@ export default function NeurosciencePage() {
   const [result, setResult] = useState<FocusResult | null>(null);
   const [last, setLast] = useState<FocusResult | null>(null);
   const [hasSignal, setHasSignal] = useState(false); // a real, non-zero EEG reading arrived
+  const [bands, setBands] = useState<BandPowers | null>(null);
 
   const handleRef = useRef<EEGHandle | null>(null);
   const samplesRef = useRef<number[]>([]);
@@ -87,6 +90,7 @@ export default function NeurosciencePage() {
     setPhase("connecting");
     setStatusDetail("");
     setHasSignal(false);
+    setBands(null);
     samplesRef.current = [];
     startCamera(); // show webcam preview during connect + session
     handleRef.current?.stop();
@@ -95,6 +99,7 @@ export default function NeurosciencePage() {
       (s) => {
         setAttention(s.attention);
         setMeditation(s.meditation);
+        if (s.bands) setBands(s.bands);
         // Only a clean, non-zero attention reading counts as a real signal.
         if (s.attention > 0 && s.poorSignal < 200) setHasSignal(true);
       },
@@ -198,6 +203,10 @@ export default function NeurosciencePage() {
 
             {phase === "running" && (
               <RunningPanel secondsLeft={secondsLeft} mode={mode} onStop={finishSession} />
+            )}
+
+            {(phase === "connecting" || phase === "running") && (
+              <BrainwavesPanel bands={bands} />
             )}
 
             {phase === "results" && result && result.noData && (
@@ -513,6 +522,50 @@ function ResultsPanel({
 }
 
 // ---------------- Small UI bits ----------------
+function BrainwavesPanel({ bands }: { bands: BandPowers | null }) {
+  return (
+    <div className="mt-4 rounded-xl border border-neon/15 bg-black/40 p-4">
+      <div className="flex items-center justify-between">
+        <div className="terminal-text text-[10px] uppercase tracking-widest text-neon">
+          LIVE BRAINWAVES
+        </div>
+        <div className="terminal-text text-[10px] text-mist">
+          {bands ? "streaming" : "waiting for data…"}
+        </div>
+      </div>
+      <div className="mt-3 space-y-2.5">
+        {BAND_MEANING.map((b) => {
+          const v = bands ? bands[b.key] : 0;
+          return (
+            <div key={b.key}>
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm font-semibold text-white">
+                  {b.label}{" "}
+                  <span className="terminal-text text-[10px] font-normal text-mist">{b.hz}</span>
+                </span>
+                <span className="terminal-text text-xs text-mist">{v}</span>
+              </div>
+              <div className="mt-1 h-2 w-full overflow-hidden rounded-full border border-steel bg-black/50">
+                <div
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{ width: `${v}%`, backgroundColor: b.color }}
+                />
+              </div>
+              <p className="mt-1 text-[11px] leading-snug text-mist">{b.meaning}</p>
+            </div>
+          );
+        })}
+      </div>
+      {!bands && (
+        <p className="terminal-text mt-3 text-[11px] text-mist">
+          Bars animate once the headset streams EEG band power. If they stay flat on a real device,
+          no data is reaching the browser — try reconnecting or a different port.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CameraView({
   videoRef,
   on,

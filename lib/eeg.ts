@@ -12,11 +12,29 @@
 //   {"eSense":{"attention":57,"meditation":40},"poorSignalLevel":0}
 // ============================================================
 
+export interface BandPowers {
+  delta: number; // 0-100 display scale
+  theta: number;
+  alpha: number;
+  beta: number;
+  gamma: number;
+}
+
 export interface EEGSample {
   attention: number; // 0-100 focus (eSense attention)
   meditation: number; // 0-100 calm (eSense meditation)
   poorSignal: number; // 0 = perfect contact, 200 = no contact
+  bands?: BandPowers; // live EEG band powers (delta..gamma)
 }
+
+// What each brainwave band reflects for public speaking.
+export const BAND_MEANING: { key: keyof BandPowers; label: string; hz: string; color: string; meaning: string }[] = [
+  { key: "delta", label: "Delta", hz: "0.5–4 Hz", color: "#6366f1", meaning: "Deep rest. High while speaking = disengaged or drowsy — keep this low." },
+  { key: "theta", label: "Theta", hz: "4–8 Hz", color: "#1FB6A8", meaning: "Mind-wandering & imagination. Spikes = distraction; a little fuels storytelling." },
+  { key: "alpha", label: "Alpha", hz: "8–12 Hz", color: "#39FF14", meaning: "Calm, relaxed alertness — your composed-confidence band. Healthy alpha = low nerves." },
+  { key: "beta", label: "Beta", hz: "12–30 Hz", color: "#E6B800", meaning: "Active focus & engagement while presenting. Very high = over-arousal / anxiety." },
+  { key: "gamma", label: "Gamma", hz: "30+ Hz", color: "#f472b6", meaning: "Peak processing & sharp articulation — brief bursts when you're 'on'." },
+];
 
 export type EEGStatus =
   | "idle"
@@ -50,10 +68,11 @@ export function startEEG(
   mode: EEGMode,
   onSample: (s: EEGSample) => void,
   onStatus: (s: EEGStatus, detail?: string) => void,
+  opts?: { baud?: number },
 ): EEGHandle {
   if (mode === "sim") return startSimulation(onSample, onStatus);
   if (TGC_WS_URL) return startThinkGearWS(TGC_WS_URL, onSample, onStatus);
-  return startSerial(onSample, onStatus);
+  return startSerial(onSample, onStatus, opts?.baud ?? MINDWAVE_BAUD);
 }
 
 // ---------------- Real device via Web Serial (browser-native, HTTPS-safe) ----------------
@@ -62,6 +81,7 @@ export function startEEG(
 function startSerial(
   onSample: (s: EEGSample) => void,
   onStatus: (s: EEGStatus, detail?: string) => void,
+  baud: number,
 ): EEGHandle {
   if (!isWebSerialSupported()) {
     onStatus(
@@ -80,7 +100,7 @@ function startSerial(
     try {
       // Must run inside the click gesture that called startEEG.
       port = await (navigator as any).serial.requestPort();
-      await port.open({ baudRate: MINDWAVE_BAUD });
+      await port.open({ baudRate: baud });
     } catch (e: any) {
       if (!cancelled)
         onStatus(
@@ -90,12 +110,10 @@ function startSerial(
       return;
     }
 
-    onStatus("connected");
+    onStatus("connected", "Port open — waiting for data…");
     const parser = new ThinkGearParser((sample) => {
       if (cancelled) return;
-      if (sample.poorSignal >= 200) onStatus("no-signal", "Adjust the headset — no signal.");
-      else onStatus("connected");
-      onSample(sample);
+      onSample(sample); // includes poorSignal so the UI can show contact quality
     });
 
     try {
@@ -135,7 +153,10 @@ function startSerial(
 // Payload codes: 0x02 poorSignal, 0x04 attention, 0x05 meditation (each 1 byte).
 class ThinkGearParser {
   private buf: number[] = [];
-  private poorSignal = 0;
+  private poorSignal = 200;
+  private lastAttention = 0;
+  private lastMeditation = 0;
+  private bands: BandPowers | undefined;
   constructor(private emit: (s: EEGSample) => void) {}
 
   push(chunk: Uint8Array) {
@@ -169,30 +190,61 @@ class ThinkGearParser {
 
   private handlePayload(p: number[]) {
     let i = 0;
-    let attention: number | null = null;
-    let meditation: number | null = null;
+    let updated = false;
     while (i < p.length) {
       const code = p[i++];
-      if (code === 0x02) {
+      if (code === 0x55) {
+        // EXCODE marker — no value byte, the real code follows
+        continue;
+      } else if (code === 0x02) {
         this.poorSignal = p[i++];
+        updated = true;
       } else if (code === 0x04) {
-        attention = p[i++];
+        this.lastAttention = p[i++];
+        updated = true;
       } else if (code === 0x05) {
-        meditation = p[i++];
+        this.lastMeditation = p[i++];
+        updated = true;
+      } else if (code === 0x83) {
+        // ASIC EEG power: 8 bands × 3-byte big-endian values
+        const len = p[i++];
+        if (len === 24) {
+          const raw: number[] = [];
+          for (let b = 0; b < 8; b++) {
+            const v = (p[i] << 16) | (p[i + 1] << 8) | p[i + 2];
+            raw.push(v);
+            i += 3;
+          }
+          // raw order: delta, theta, lowAlpha, highAlpha, lowBeta, highBeta, lowGamma, midGamma
+          const norm = (v: number) => clamp(Math.round(Math.log10(v + 1) * 14));
+          this.bands = {
+            delta: norm(raw[0]),
+            theta: norm(raw[1]),
+            alpha: norm((raw[2] + raw[3]) / 2),
+            beta: norm((raw[4] + raw[5]) / 2),
+            gamma: norm((raw[6] + raw[7]) / 2),
+          };
+          updated = true;
+        } else {
+          i += len;
+        }
       } else if (code >= 0x80) {
-        // multi-byte value: next byte is length
+        // other multi-byte value: next byte is length
         const len = p[i++];
         i += len;
       } else {
-        // single-byte value we don't use
+        // other single-byte value (e.g. blink) we don't use
         i += 1;
       }
     }
-    if (attention !== null || meditation !== null) {
+    // Emit on any relevant update — including poor-signal-only packets — so the
+    // UI can show that data is flowing and the current contact quality.
+    if (updated) {
       this.emit({
-        attention: clamp(attention ?? 0),
-        meditation: clamp(meditation ?? 0),
+        attention: clamp(this.lastAttention),
+        meditation: clamp(this.lastMeditation),
         poorSignal: this.poorSignal,
+        bands: this.bands,
       });
     }
   }
@@ -288,7 +340,22 @@ function startSimulation(
     meditation += (55 - meditation) * 0.15 + (Math.random() - 0.5) * 8;
     meditation = clamp(meditation);
 
-    onSample({ attention: Math.round(attention), meditation: Math.round(meditation), poorSignal: 0 });
+    // Plausible band powers tied to focus/calm, with noise and bursts.
+    const j = () => (Math.random() - 0.5) * 14;
+    const bands = {
+      delta: clamp(100 - attention * 0.6 + j()), // high when disengaged
+      theta: clamp(70 - meditation * 0.4 + j()), // mind-wandering
+      alpha: clamp(meditation * 0.85 + j()), // calm alertness
+      beta: clamp(attention * 0.85 + j()), // active focus
+      gamma: clamp(attention * 0.5 + (Math.random() < 0.1 ? 30 : 0) + j()), // bursts
+    };
+
+    onSample({
+      attention: Math.round(attention),
+      meditation: Math.round(meditation),
+      poorSignal: 0,
+      bands,
+    });
   }, 1000);
 
   return { stop: () => clearInterval(id) };
