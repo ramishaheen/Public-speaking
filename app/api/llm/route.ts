@@ -52,6 +52,23 @@ function ageRules(age: number | null): string {
   return "The learner is an adult (18+). You may use professional, leadership, career, meeting, interview, networking, and presentation examples.";
 }
 
+// Render measured delivery metrics for the prompt (omitted if not provided).
+function voiceMetricsBlock(m: any): string {
+  if (!m) return "";
+  const parts: string[] = [];
+  if (m.wpm != null) parts.push(`speaking pace: ${m.wpm} words/min`);
+  if (m.speakingSec != null) parts.push(`speaking time: ${m.speakingSec}s of ${m.durationSec}s`);
+  parts.push(`pauses: ${m.pauseCount} (total ${m.pauseTotalSec}s, longest ${m.longestPauseSec}s)`);
+  if (m.fillerCount != null)
+    parts.push(`filler words: ${m.fillerCount}${m.fillerWords?.length ? ` (${m.fillerWords.join(", ")})` : ""}`);
+  if (m.energyVariationPct != null) parts.push(`vocal energy variation: ${m.energyVariationPct}/100`);
+  if (m.pitchVariationSemitones != null)
+    parts.push(`pitch variation: ${m.pitchVariationSemitones} semitones`);
+  if (m.monotoneRisk != null) parts.push(`monotone risk: ${m.monotoneRisk}/100`);
+  return `MEASURED DELIVERY (from the audio recording — objective, use these):
+- ${parts.join("\n- ")}`;
+}
+
 // Tolerant JSON extraction from a model response.
 function parseJSON(text: string): any {
   if (!text) throw new Error("empty model response");
@@ -236,9 +253,12 @@ Learner's current goals: ${JSON.stringify(p?.selectedGoals || [])}.
 
 ${responseBlock}
 
+${voiceMetricsBlock(p?.voiceMetrics)}
+
 Do a DEEP, RIGOROUS, CRITICAL analysis — like a top executive speaking coach reviewing a recording line by line. You are NOT a cheerleader. Generic praise is forbidden.
 
 How to evaluate:
+0. If MEASURED DELIVERY metrics are provided above, you MUST use them for the delivery-related dimensions: pace/WPM and pauses → confidence & clarity; filler count → clarity & confidence; vocal variety / monotone risk & pitch variation → vocal expressiveness, engagement & storytelling. Cite the actual numbers (e.g. "at 178 wpm you rushed", "monotone risk 72/100"). Do not guess delivery if metrics exist.
 1. First, judge whether the answer actually ACCOMPLISHES the scenario's goal ("${p?.scenarioTitle || ""}"). If it's off-topic, vague, or too short, scores must be low (25-50) and say so directly.
 2. Score each of the 6 dimensions 0-100 STRICTLY on the merit of THIS specific answer. Spread the scores — they should NOT all be similar; the weakest and strongest dimensions must differ clearly. Reserve 85+ only for genuinely excellent, professional delivery.
 3. For EVERY dimension, write a 1-2 sentence note that QUOTES their exact words and explains WHY that score — what specifically worked or failed (e.g. filler words, hedging like "I think/maybe", run-on sentences, missing opening/closing, no evidence/numbers, weak verbs, no call to action, vague nouns, no audience focus).
