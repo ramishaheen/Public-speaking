@@ -32,11 +32,19 @@ export interface EEGHandle {
 
 export type EEGMode = "device" | "sim";
 
-// Default ThinkGear Connector endpoint. Some local bridges expose a
-// WebSocket on this port; configurable for advanced setups.
+// Optional WebSocket bridge to a local ThinkGear server (advanced setups).
+// NOTE: a hosted HTTPS page cannot open an insecure ws:// URL, so the default
+// device path is the Web Serial API (works browser-native over HTTPS).
 const TGC_WS_URL =
-  (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_THINKGEAR_WS) ||
-  "ws://127.0.0.1:13854";
+  typeof process !== "undefined" ? process.env?.NEXT_PUBLIC_THINKGEAR_WS : undefined;
+
+// MindWave (USB dongle) is typically 9600; MindWave Mobile is 57600.
+const MINDWAVE_BAUD =
+  (typeof process !== "undefined" && Number(process.env?.NEXT_PUBLIC_MINDWAVE_BAUD)) || 57600;
+
+export function isWebSerialSupported(): boolean {
+  return typeof navigator !== "undefined" && "serial" in navigator;
+}
 
 export function startEEG(
   mode: EEGMode,
@@ -44,11 +52,155 @@ export function startEEG(
   onStatus: (s: EEGStatus, detail?: string) => void,
 ): EEGHandle {
   if (mode === "sim") return startSimulation(onSample, onStatus);
-  return startDevice(onSample, onStatus);
+  if (TGC_WS_URL) return startThinkGearWS(TGC_WS_URL, onSample, onStatus);
+  return startSerial(onSample, onStatus);
 }
 
-// ---------------- Real device (ThinkGear Connector) ----------------
-function startDevice(
+// ---------------- Real device via Web Serial (browser-native, HTTPS-safe) ----------------
+// Reads the ThinkGear binary stream directly from the MindWave's serial port
+// (USB dongle, or a Bluetooth-paired MindWave Mobile that appears as a COM port).
+function startSerial(
+  onSample: (s: EEGSample) => void,
+  onStatus: (s: EEGStatus, detail?: string) => void,
+): EEGHandle {
+  if (!isWebSerialSupported()) {
+    onStatus(
+      "error",
+      "This browser can't access serial devices. Use Chrome or Edge on desktop, or run Simulation.",
+    );
+    return { stop: () => {} };
+  }
+
+  onStatus("connecting");
+  let cancelled = false;
+  let port: any = null;
+  let reader: any = null;
+
+  (async () => {
+    try {
+      // Must run inside the click gesture that called startEEG.
+      port = await (navigator as any).serial.requestPort();
+      await port.open({ baudRate: MINDWAVE_BAUD });
+    } catch (e: any) {
+      if (!cancelled)
+        onStatus(
+          "error",
+          "No device selected, or the port couldn't open. Pick your MindWave port (or run Simulation).",
+        );
+      return;
+    }
+
+    onStatus("connected");
+    const parser = new ThinkGearParser((sample) => {
+      if (cancelled) return;
+      if (sample.poorSignal >= 200) onStatus("no-signal", "Adjust the headset — no signal.");
+      else onStatus("connected");
+      onSample(sample);
+    });
+
+    try {
+      reader = port.readable.getReader();
+      while (!cancelled) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) parser.push(value as Uint8Array);
+      }
+    } catch (e: any) {
+      if (!cancelled) onStatus("error", "Lost connection to the device.");
+    } finally {
+      try {
+        reader?.releaseLock();
+      } catch {}
+      try {
+        await port?.close();
+      } catch {}
+    }
+  })();
+
+  return {
+    stop: () => {
+      cancelled = true;
+      try {
+        reader?.cancel();
+      } catch {}
+      try {
+        port?.close();
+      } catch {}
+    },
+  };
+}
+
+// ThinkGear binary protocol parser.
+// Packet: 0xAA 0xAA <pLen> <payload[pLen]> <checksum>
+// Payload codes: 0x02 poorSignal, 0x04 attention, 0x05 meditation (each 1 byte).
+class ThinkGearParser {
+  private buf: number[] = [];
+  private poorSignal = 0;
+  constructor(private emit: (s: EEGSample) => void) {}
+
+  push(chunk: Uint8Array) {
+    for (let i = 0; i < chunk.length; i++) this.buf.push(chunk[i]);
+    this.parse();
+  }
+
+  private parse() {
+    while (this.buf.length >= 4) {
+      // find sync 0xAA 0xAA
+      if (this.buf[0] !== 0xaa || this.buf[1] !== 0xaa) {
+        this.buf.shift();
+        continue;
+      }
+      const pLen = this.buf[2];
+      if (pLen >= 0xaa) {
+        // invalid length, resync
+        this.buf.shift();
+        continue;
+      }
+      if (this.buf.length < 3 + pLen + 1) return; // wait for more bytes
+      const payload = this.buf.slice(3, 3 + pLen);
+      const checksum = this.buf[3 + pLen];
+      const sum = payload.reduce((a, b) => (a + b) & 0xff, 0);
+      const expected = ~sum & 0xff;
+      this.buf = this.buf.slice(3 + pLen + 1);
+      if (checksum !== expected) continue; // drop corrupt packet
+      this.handlePayload(payload);
+    }
+  }
+
+  private handlePayload(p: number[]) {
+    let i = 0;
+    let attention: number | null = null;
+    let meditation: number | null = null;
+    while (i < p.length) {
+      const code = p[i++];
+      if (code === 0x02) {
+        this.poorSignal = p[i++];
+      } else if (code === 0x04) {
+        attention = p[i++];
+      } else if (code === 0x05) {
+        meditation = p[i++];
+      } else if (code >= 0x80) {
+        // multi-byte value: next byte is length
+        const len = p[i++];
+        i += len;
+      } else {
+        // single-byte value we don't use
+        i += 1;
+      }
+    }
+    if (attention !== null || meditation !== null) {
+      this.emit({
+        attention: clamp(attention ?? 0),
+        meditation: clamp(meditation ?? 0),
+        poorSignal: this.poorSignal,
+      });
+    }
+  }
+}
+
+// ---------------- Optional ThinkGear WebSocket bridge (advanced) ----------------
+function startThinkGearWS(
+  url: string,
   onSample: (s: EEGSample) => void,
   onStatus: (s: EEGStatus, detail?: string) => void,
 ): EEGHandle {
@@ -57,18 +209,15 @@ function startDevice(
   let closed = false;
 
   try {
-    ws = new WebSocket(TGC_WS_URL);
-  } catch (e) {
-    onStatus("error", "Could not open a connection to the ThinkGear Connector.");
+    ws = new WebSocket(url);
+  } catch {
+    onStatus("error", "Could not open the ThinkGear WebSocket bridge.");
     return { stop: () => {} };
   }
 
   const failTimer = setTimeout(() => {
     if (ws && ws.readyState !== WebSocket.OPEN) {
-      onStatus(
-        "error",
-        "No ThinkGear Connector detected. Start the NeuroSky ThinkGear Connector app (or use Simulation).",
-      );
+      onStatus("error", "No ThinkGear bridge detected at " + url + " (or run Simulation).");
       try {
         ws?.close();
       } catch {}
@@ -78,12 +227,10 @@ function startDevice(
   ws.onopen = () => {
     clearTimeout(failTimer);
     onStatus("connected");
-    // Ask the connector for JSON output.
     try {
       ws?.send(JSON.stringify({ enableRawOutput: false, format: "Json" }));
     } catch {}
   };
-
   ws.onmessage = (evt) => {
     if (closed) return;
     try {
@@ -93,25 +240,16 @@ function startDevice(
       const poor = typeof data?.poorSignalLevel === "number" ? data.poorSignalLevel : 0;
       if (poor >= 200) onStatus("no-signal", "Adjust the headset — no signal.");
       else onStatus("connected");
-      if (typeof a === "number") {
+      if (typeof a === "number")
         onSample({ attention: clamp(a), meditation: clamp(m ?? 0), poorSignal: poor });
-      }
     } catch {
-      /* ignore malformed frames */
+      /* ignore */
     }
   };
-
   ws.onerror = () => {
-    if (!closed)
-      onStatus(
-        "error",
-        "Connection error. Ensure the ThinkGear Connector is running, then retry — or use Simulation.",
-      );
+    if (!closed) onStatus("error", "WebSocket bridge error — or run Simulation.");
   };
-
-  ws.onclose = () => {
-    clearTimeout(failTimer);
-  };
+  ws.onclose = () => clearTimeout(failTimer);
 
   return {
     stop: () => {
