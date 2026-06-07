@@ -67,6 +67,25 @@ export function isWebSerialSupported(): boolean {
 // Remembered MindWave serial port, so reconnects skip the picker dialog.
 let preferredPort: any = null;
 
+// Turn a Web Serial open/select error into actionable guidance.
+function openErrorMessage(e: any): string {
+  const name = e?.name || "";
+  const msg = String(e?.message || e || "");
+  if (name === "NotFoundError" || /No port selected/i.test(msg)) {
+    return 'No port chosen. Click Connect again and pick "MindWave Mobile".';
+  }
+  if (/already open/i.test(msg)) {
+    return "That port is already in use — close other EEG apps (e.g. ThinkGear Connector / NeuroSky) and retry.";
+  }
+  // Most common on Windows Bluetooth: the headset link isn't live.
+  return (
+    "Couldn't open the MindWave port. Turn the headset ON and make sure it's connected " +
+    "(the light should be solid, not blinking), close any other app using it, then Retry. " +
+    'If it still fails, try selecting "Serial Port Server Port (COM3)" instead — or run Simulation. ' +
+    `[${name || "error"}: ${msg.slice(0, 80)}]`
+  );
+}
+
 export function startEEG(
   mode: EEGMode,
   onSample: (s: EEGSample) => void,
@@ -101,9 +120,10 @@ function startSerial(
 
   (async () => {
     const serial = (navigator as any).serial;
+    let lastErr: any = null;
     try {
-      // Auto-pick: reuse the MindWave the user granted before (this session or
-      // a previous one) so they don't have to choose from the dialog each time.
+      // Auto-pick: reuse the MindWave the user granted before so they don't
+      // have to choose from the dialog each time.
       let chosen: any = preferredPort;
       if (!chosen) {
         try {
@@ -111,28 +131,29 @@ function startSerial(
           if (granted && granted.length === 1) chosen = granted[0];
         } catch {}
       }
-      // Otherwise show the picker (must run inside the click gesture).
-      if (!chosen) chosen = await serial.requestPort();
-      port = chosen;
-      try {
-        await port.open({ baudRate: baud });
-      } catch {
-        // A remembered port can go stale; fall back to a fresh pick once.
-        if (chosen === preferredPort) {
-          preferredPort = null;
-          port = await serial.requestPort();
-          await port.open({ baudRate: baud });
-        } else {
-          throw new Error("open failed");
+
+      const tryOpen = async (p: any) => {
+        await p.open({ baudRate: baud });
+        port = p;
+        preferredPort = p;
+      };
+
+      let opened = false;
+      if (chosen) {
+        try {
+          await tryOpen(chosen);
+          opened = true;
+        } catch (e) {
+          lastErr = e;
+          preferredPort = null; // remembered port is stale/busy — fall back to picker
         }
       }
-      preferredPort = port; // remember for next time
+      if (!opened) {
+        const picked = await serial.requestPort(); // shows the dialog
+        await tryOpen(picked);
+      }
     } catch (e: any) {
-      if (!cancelled)
-        onStatus(
-          "error",
-          "No device selected, or the port couldn't open. Pick \"MindWave Mobile\" in the dialog (or run Simulation).",
-        );
+      if (!cancelled) onStatus("error", openErrorMessage(e || lastErr));
       return;
     }
 
