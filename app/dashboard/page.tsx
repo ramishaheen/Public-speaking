@@ -109,6 +109,12 @@ export default function DashboardPage() {
               >
                 🧠 NeuroScience ›
               </Link>
+              <Link
+                href="/skills"
+                className="inline-flex items-center gap-2 rounded-xl border border-gold/50 bg-gold/10 px-5 py-2.5 font-semibold text-gold hover:bg-gold/20"
+              >
+                📊 Skills Report & Blind Spots ›
+              </Link>
             </div>
           </div>
         </div>
