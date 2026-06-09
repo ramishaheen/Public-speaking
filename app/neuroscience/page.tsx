@@ -790,15 +790,37 @@ function BrainwavesPanel({ bands }: { bands: BandPowers | null }) {
     <div className="mt-4 rounded-xl border border-neon/15 bg-black/40 p-4">
       <div className="flex items-center justify-between">
         <div className="terminal-text text-[10px] uppercase tracking-widest text-neon">
-          LIVE BRAINWAVES
+          LIVE BRAINWAVES <span className="text-mist">(relative %)</span>
         </div>
         <div className="terminal-text text-[10px] text-mist">
           {bands ? "streaming" : "waiting for data…"}
         </div>
       </div>
+
+      {bands && (
+        <div className="mt-3 rounded-lg border border-gold/25 bg-gold/5 p-2.5">
+          <div className="flex items-center justify-between">
+            <span className="terminal-text text-[10px] uppercase tracking-widest text-gold">
+              Engagement index
+            </span>
+            <span className="terminal-text text-xs text-gold">{bands.engagement}/100</span>
+          </div>
+          <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-black/50">
+            <div
+              className="h-full rounded-full bg-gold/70 transition-all duration-500"
+              style={{ width: `${bands.engagement}%` }}
+            />
+          </div>
+          <p className="mt-1 text-[11px] text-mist">
+            Beta / (Alpha+Theta) — task engagement &amp; arousal. ~40–70 is an engaged,
+            composed presenting state; very high may indicate over-arousal/anxiety.
+          </p>
+        </div>
+      )}
+
       <div className="mt-3 space-y-2.5">
         {BAND_MEANING.map((b) => {
-          const v = bands ? bands[b.key] : 0;
+          const v = bands ? (bands[b.key] as number) : 0;
           return (
             <div key={b.key}>
               <div className="flex items-baseline justify-between">
@@ -819,7 +841,13 @@ function BrainwavesPanel({ bands }: { bands: BandPowers | null }) {
           );
         })}
       </div>
-      {!bands && (
+      {bands ? (
+        <p className="mt-3 text-[10px] leading-snug text-mist">
+          Shown as a share of your spectrum (they sum to ~100%). Slow Delta is naturally the
+          largest — read <b>changes vs your own baseline</b>, not absolute values. Single-channel
+          EEG: these are cognitive-state proxies, not exact measures.
+        </p>
+      ) : (
         <p className="terminal-text mt-3 text-[11px] text-mist">
           Bars animate once the headset streams EEG band power. If they stay flat on a real device,
           no data is reaching the browser — try reconnecting or a different port.
