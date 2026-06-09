@@ -13,26 +13,29 @@
 // ============================================================
 
 export interface BandPowers {
-  delta: number; // 0-100 display scale
+  delta: number; // relative power: % of total spectrum
   theta: number;
   alpha: number;
   beta: number;
   gamma: number;
+  engagement: number; // 0-100 engagement index = Beta / (Alpha + Theta)
 }
 
 export interface EEGSample {
   attention: number; // 0-100 focus (eSense attention)
   meditation: number; // 0-100 calm (eSense meditation)
   poorSignal: number; // 0 = perfect contact, 200 = no contact
-  bands?: BandPowers; // live EEG band powers (delta..gamma)
+  bands?: BandPowers; // live EEG band powers (relative %) + engagement
 }
 
-// What each brainwave band reflects for public speaking.
+// What each brainwave band reflects for public speaking. Bands are shown as
+// RELATIVE power (% of your spectrum) — slow waves (delta) are naturally the
+// largest share, so read CHANGES vs your own baseline, not absolute values.
 export const BAND_MEANING: { key: keyof BandPowers; label: string; hz: string; color: string; meaning: string }[] = [
-  { key: "delta", label: "Delta", hz: "0.5–4 Hz", color: "#6366f1", meaning: "Deep rest. High while speaking = disengaged or drowsy — keep this low." },
-  { key: "theta", label: "Theta", hz: "4–8 Hz", color: "#1FB6A8", meaning: "Mind-wandering & imagination. Spikes = distraction; a little fuels storytelling." },
-  { key: "alpha", label: "Alpha", hz: "8–12 Hz", color: "#39FF14", meaning: "Calm, relaxed alertness — your composed-confidence band. Healthy alpha = low nerves." },
-  { key: "beta", label: "Beta", hz: "12–30 Hz", color: "#E6B800", meaning: "Active focus & engagement while presenting. Very high = over-arousal / anxiety." },
+  { key: "delta", label: "Delta", hz: "0.5–4 Hz", color: "#6366f1", meaning: "Slow waves — naturally your largest share. A rise above baseline may indicate drowsiness or eye/movement artifact." },
+  { key: "theta", label: "Theta", hz: "4–8 Hz", color: "#1FB6A8", meaning: "Mind-wandering & imagination. A spike vs baseline may indicate distraction; a little fuels storytelling." },
+  { key: "alpha", label: "Alpha", hz: "8–12 Hz", color: "#39FF14", meaning: "Calm, relaxed alertness — your composed-confidence band. Rising alpha is consistent with lower nerves." },
+  { key: "beta", label: "Beta", hz: "12–30 Hz", color: "#E6B800", meaning: "Active focus & engagement while presenting. Much higher than baseline may indicate over-arousal / anxiety." },
   { key: "gamma", label: "Gamma", hz: "30+ Hz", color: "#f472b6", meaning: "Peak processing & sharp articulation — brief bursts when you're 'on'." },
 ];
 
@@ -263,13 +266,24 @@ class ThinkGearParser {
             i += 3;
           }
           // raw order: delta, theta, lowAlpha, highAlpha, lowBeta, highBeta, lowGamma, midGamma
-          const norm = (v: number) => clamp(Math.round(Math.log10(v + 1) * 14));
+          const dG = raw[0];
+          const tG = raw[1];
+          const aG = raw[2] + raw[3];
+          const bG = raw[4] + raw[5];
+          const gG = raw[6] + raw[7];
+          const total = dG + tG + aG + bG + gG;
+          // Relative power: each band as % of the total spectrum (honest & comparable).
+          const rel = (v: number) => (total > 0 ? Math.round((v / total) * 100) : 0);
+          // Engagement index = Beta / (Alpha + Theta) — a recognized arousal/
+          // engagement proxy; scaled to 0-100.
+          const engagementRatio = aG + tG > 0 ? bG / (aG + tG) : 0;
           this.bands = {
-            delta: norm(raw[0]),
-            theta: norm(raw[1]),
-            alpha: norm((raw[2] + raw[3]) / 2),
-            beta: norm((raw[4] + raw[5]) / 2),
-            gamma: norm((raw[6] + raw[7]) / 2),
+            delta: rel(dG),
+            theta: rel(tG),
+            alpha: rel(aG),
+            beta: rel(bG),
+            gamma: rel(gG),
+            engagement: clamp(Math.round(engagementRatio * 70)),
           };
           updated = true;
         } else {
@@ -387,14 +401,21 @@ function startSimulation(
     meditation += (55 - meditation) * 0.15 + (Math.random() - 0.5) * 8;
     meditation = clamp(meditation);
 
-    // Plausible band powers tied to focus/calm, with noise and bursts.
+    // Plausible relative band powers tied to focus/calm, with noise and bursts.
     const j = () => (Math.random() - 0.5) * 14;
+    const dRaw = clamp(100 - attention * 0.6 + j());
+    const tRaw = clamp(70 - meditation * 0.4 + j());
+    const aRaw = clamp(meditation * 0.85 + j());
+    const bRaw = clamp(attention * 0.85 + j());
+    const gRaw = clamp(attention * 0.5 + (Math.random() < 0.1 ? 30 : 0) + j());
+    const tot = dRaw + tRaw + aRaw + bRaw + gRaw || 1;
     const bands = {
-      delta: clamp(100 - attention * 0.6 + j()), // high when disengaged
-      theta: clamp(70 - meditation * 0.4 + j()), // mind-wandering
-      alpha: clamp(meditation * 0.85 + j()), // calm alertness
-      beta: clamp(attention * 0.85 + j()), // active focus
-      gamma: clamp(attention * 0.5 + (Math.random() < 0.1 ? 30 : 0) + j()), // bursts
+      delta: Math.round((dRaw / tot) * 100),
+      theta: Math.round((tRaw / tot) * 100),
+      alpha: Math.round((aRaw / tot) * 100),
+      beta: Math.round((bRaw / tot) * 100),
+      gamma: Math.round((gRaw / tot) * 100),
+      engagement: clamp(Math.round((bRaw / (aRaw + tRaw || 1)) * 70)),
     };
 
     onSample({
